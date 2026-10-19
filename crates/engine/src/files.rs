@@ -125,9 +125,16 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     Some(lightcraft_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
 }
 
+fn xmp_has_rating(x: &str) -> bool {
+    if x.contains("xmp:Rating") || x.contains("xap:Rating") || x.contains(":Rating=") || x.contains(":Rating>") || x.contains(":Rating ") {
+        return true;
+    }
+    lightcraft_meta::parse_xmp(x).ok().and_then(|d| d.metadata.rating).is_some()
+}
+
 fn embedded_or_exif_xmp(bytes: &[u8], m: &lightcraft_meta::Metadata) -> Option<String> {
     match lightcraft_meta::embedded(bytes).xmp {
-        Some(x) if !x.contains("Rating") && m.rating.is_some() => {
+        Some(x) if !xmp_has_rating(&x) && m.rating.is_some() => {
             let fresh = lightcraft_meta::write_xmp(m, None);
             lightcraft_meta::merge_xmp(&x, &fresh, lightcraft_meta::MergeRules { owned_if_present: &["xmp:Rating"], ..Default::default() })
                 .ok()

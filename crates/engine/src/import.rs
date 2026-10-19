@@ -1063,7 +1063,7 @@ impl ImportJob {
             // the XMP sidecar (or a file's embedded XMP), read before copying: its capture time files
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
-            let has_embedded_xmp = raw || matches!(info.format.as_str(), "JPEG" | "JPG" | "TIFF" | "TIF");
+            let has_embedded_xmp = raw || matches!(info.format.to_ascii_uppercase().as_str(), "JPEG" | "JPG" | "TIFF" | "TIF" | "PNG" | "WEBP");
             let packet = crate::sidecar::find_sidecar(&path, self.naming)
                 .and_then(|f| std::fs::read_to_string(f).ok())
                 .or_else(|| info.xmp.clone().filter(|_| has_embedded_xmp));
