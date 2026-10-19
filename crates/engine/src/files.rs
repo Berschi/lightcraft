@@ -125,6 +125,19 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
     Some(lightcraft_pipeline::optics::reorient_lens(&lens, raw.orientation, cw, ch))
 }
 
+fn embedded_or_exif_xmp(bytes: &[u8], m: &lightcraft_meta::Metadata) -> Option<String> {
+    match lightcraft_meta::embedded(bytes).xmp {
+        Some(x) if !x.contains("Rating") && m.rating.is_some() => {
+            let fresh = lightcraft_meta::write_xmp(m, None);
+            lightcraft_meta::merge_xmp(&x, &fresh, lightcraft_meta::MergeRules { owned_if_present: &["xmp:Rating"], ..Default::default() })
+                .ok()
+                .or(Some(x))
+        }
+        Some(x) => Some(x),
+        None => m.rating.map(|_| lightcraft_meta::write_xmp(m, None)),
+    }
+}
+
 fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
@@ -137,13 +150,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    let (rating, flag) = match m.rating {
-        Some(r) if r < 0 => (0, lightcraft_catalog::Flag::Reject),
-        Some(r) => (r.clamp(0, 5) as u8, lightcraft_catalog::Flag::None),
-        None => (0, lightcraft_catalog::Flag::None),
-    };
-    let label = m.label.as_deref().and_then(|l| lightcraft_catalog::ColorLabel::parse(l.trim()));
-    let label_text = m.label.clone();
+    let xmp = embedded_or_exif_xmp(bytes, &m);
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
@@ -158,13 +165,9 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
                     file_size: bytes.len() as u64,
                     captured,
                     meta,
-                    rating,
-                    flag,
-                    label,
-                    label_text,
                     as_shot_wb: None,
                     content_hash,
-                    xmp: lightcraft_meta::embedded(bytes).xmp,
+                    xmp,
                     preview_only: Some(why),
                     ..Default::default()
                 });
@@ -189,13 +192,9 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             captured,
             file_modified: None,
             meta,
-            rating,
-            flag,
-            label,
-            label_text,
             as_shot_wb,
             content_hash,
-            xmp: lightcraft_meta::embedded(bytes).xmp,
+            xmp,
             preview_only: None,
         });
     }
@@ -225,14 +224,10 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         captured,
         file_modified: None,
         meta,
-        rating,
-        flag,
-        label,
-        label_text,
         as_shot_wb: None,
         content_hash,
         embedded_lens: None,
-        xmp: None,
+        xmp,
         preview_only: None,
     })
 }

@@ -1794,9 +1794,9 @@ fn presets_apply_the_imported_profile_they_name() {
 }
 
 #[test]
-fn import_preserves_embedded_rating_and_label() {
+fn import_preserves_embedded_xmp_rating_and_label() {
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
-    let src = temp_dir("embedded-rating-test");
+    let src = temp_dir("embedded-xmp-rating-test");
     let px = [128u8; 40 * 30 * 3];
     let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="5" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
     let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
@@ -1808,7 +1808,60 @@ fn import_preserves_embedded_rating_and_label() {
     assert_eq!(ids(&r, "imported"), 1);
     let p = s.catalog.photos().next().unwrap();
     assert_eq!(p.rating, 5);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
     assert_eq!(p.label, Some(lightcraft_catalog::ColorLabel::Blue));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_exif_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-exif-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rating.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("exif_rating.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!(p.rating, 3);
+    assert_eq!(p.flag, lightcraft_catalog::Flag::None);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_preserves_embedded_rejected_rating() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rejected-rating-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: EXIF rating -1
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(-1), ..Default::default() });
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("exif_rejected.jpg"), &bytes).unwrap();
+
+    // Case 2: XMP rating -1
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="-1"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("xmp_rejected.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+    let exif_p = s.catalog.photos().find(|p| p.file_name == "exif_rejected.jpg").unwrap();
+    assert_eq!(exif_p.rating, 0);
+    assert_eq!(exif_p.flag, lightcraft_catalog::Flag::Reject);
+
+    let xmp_p = s.catalog.photos().find(|p| p.file_name == "xmp_rejected.jpg").unwrap();
+    assert_eq!(xmp_p.rating, 0);
+    assert_eq!(xmp_p.flag, lightcraft_catalog::Flag::Reject);
 
     let _ = std::fs::remove_dir_all(&src);
 }
