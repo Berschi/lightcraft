@@ -382,6 +382,8 @@ pub struct Session {
     /// Untouched Local records of folders not browsed for this many days are forgotten when the
     /// library opens (0 = never; persisted in prefs.json). See `cmd/browse.rs`.
     pub forget_local_days: u32,
+    /// Media Organizer workflow state (Todo → Target folder mappings, staged subfolder moves, etc.).
+    pub organizer: cmd::organizer::OrganizerState,
     /// Adds exported files to Apple Photos ([`apple_photos`]): `/usr/bin/osascript`, installed by
     /// [`Session::with_fs`] on macOS; `None` elsewhere and in sessions without a file system. Tests
     /// put a fake here.
@@ -500,6 +502,7 @@ impl Session {
             slide_backdrop: Default::default(),
             smart_previews_dir: None,
             forget_local_days: lightcraft_catalog::DEFAULT_FORGET_DAYS,
+            organizer: cmd::organizer::OrganizerState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             apple_photos: None,
             #[cfg(not(target_arch = "wasm32"))]

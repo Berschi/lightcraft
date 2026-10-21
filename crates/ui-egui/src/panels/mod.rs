@@ -22,6 +22,7 @@ pub mod library_problem;
 pub mod mask_effects;
 pub mod masking;
 pub mod notices;
+pub mod organizer;
 pub mod people;
 pub mod person;
 pub mod presets;

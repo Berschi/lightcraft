@@ -263,6 +263,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
+    ("view.organizerBar", "Media Organizer Bar", None, "Photo>Organizer"),
+    ("dialog.quickMove", "Assign Destination Subfolder…", None, "Photo>Organizer"),
+    ("dialog.quickTags", "Quick Tags…", Some("T"), "Photo>Organizer"),
+    ("dialog.cropPreview", "Crop Preview (16:9 / 24:10)…", None, "Photo>Organizer"),
+    ("dialog.convertScreenshots", "Convert Screenshot Filenames…", None, "Photo>Organizer"),
+    ("dialog.mystuffPigallery", "Add PiGallery2 URL to MyStuff…", None, "Photo>Organizer"),
 ];
 
 fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str) {
@@ -1105,6 +1111,34 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                 app.ui.view = ViewMode::PhotoGrid;
             }
             Ok(json!({"filterBar": app.ui.filter_bar}))
+        }
+        "view.organizerBar" => {
+            app.ui.organizer_bar = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.organizer_bar);
+            if app.ui.organizer_bar && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+                app.ui.view = ViewMode::PhotoGrid;
+            }
+            Ok(json!({"organizerBar": app.ui.organizer_bar}))
+        }
+        "dialog.quickMove" => {
+            crate::panels::organizer::open_quick_move(app);
+            Ok(Value::Null)
+        }
+        "dialog.quickTags" => {
+            crate::panels::organizer::open_quick_tags(app);
+            Ok(Value::Null)
+        }
+        "dialog.cropPreview" => {
+            let aspect = p.get("aspect").and_then(Value::as_str).unwrap_or("16x9");
+            crate::panels::organizer::open_crop_preview(app, aspect);
+            Ok(Value::Null)
+        }
+        "dialog.convertScreenshots" => {
+            crate::panels::organizer::open_convert_screenshots(app);
+            Ok(Value::Null)
+        }
+        "dialog.mystuffPigallery" => {
+            crate::panels::organizer::open_mystuff_pigallery(app);
+            Ok(Value::Null)
         }
         "panel.edit" => {
             panel(app, &ctx, RightPanel::Edit, "Edit");
@@ -2136,9 +2170,15 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             !cfg!(target_arch = "wasm32") && !app.session.slideshow_export.as_ref().is_some_and(|r| r.running())
         }
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
-        "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
-            app.session.active().is_some()
-        }
+        "app.export"
+        | "dialog.export"
+        | "dialog.createPreset"
+        | "dialog.rename"
+        | "dialog.captureTime"
+        | "dialog.copySettings"
+        | "dialog.quickMove"
+        | "dialog.quickTags"
+        | "dialog.cropPreview" => app.session.active().is_some(),
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
         "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),

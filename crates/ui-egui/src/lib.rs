@@ -1446,6 +1446,7 @@ impl LightcraftApp {
             panels::dialogs::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             panels::toast(self, &ctx);
+            self.text_focus = ctx.egui_wants_keyboard_input();
             self.widgets = widgets::take_registry(&ctx);
             self.end_frame(&ctx, t0);
             return;

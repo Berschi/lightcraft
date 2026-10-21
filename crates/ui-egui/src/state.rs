@@ -840,6 +840,9 @@ pub struct UiState {
     pub spots_threshold: f32,
     /// The library filter bar above the grid.
     pub filter_bar: bool,
+    /// The Media Organizer bar above the grid (Todo → Target folder, Subfolder assignment, Batch Crop, Screenshots, MyStuff).
+    #[serde(default)]
+    pub organizer_bar: bool,
     /// Folders kept in Local (Browse Folder…, Keep in Local / Add to Local; `local.addRoot`):
     /// listed after the built-in locations, across restarts, whatever is browsed.
     pub local_roots: Vec<String>,
@@ -1238,6 +1241,41 @@ pub enum Dialog {
     },
     About,
     Shortcuts,
+    /// Media Organizer: assign a destination subfolder (`M`) with substring autocomplete.
+    QuickMove {
+        subfolder: String,
+        cursor: usize,
+        fresh: bool,
+    },
+    /// Media Organizer: rapidly add/remove multiple tags (`T`) with autocomplete.
+    QuickTags {
+        text: String,
+        cursor: usize,
+        fresh: bool,
+    },
+    /// Media Organizer: preview 16:9 / 24:10 center crop on selected photo(s) before applying.
+    CropPreview {
+        aspect: String,
+        index: usize,
+    },
+    /// Media Organizer: detect and convert screenshot filenames between formats.
+    ConvertScreenshots {
+        from_pattern: String,
+        to_pattern: String,
+        hide_unrenamed: bool,
+        all_visible: bool,
+    },
+    /// Media Organizer: add/update PiGallery2 URL in MyStuff MongoDB (`games` collection).
+    MyStuffPigallery {
+        host: String,
+        pigallery_url: String,
+        games: Vec<lightcraft_engine::cmd::organizer::MyStuffGameEntry>,
+        selected_game: usize,
+        game_filter: String,
+        media: Vec<lightcraft_engine::cmd::organizer::MyStuffMediaEntry>,
+        error: Option<String>,
+        loaded_host: Option<String>,
+    },
 }
 
 fn yes() -> bool {
@@ -1378,6 +1416,7 @@ impl Default for UiState {
             settings: AppSettings::default(),
             window_fullscreen: None,
             filter_bar: false,
+            organizer_bar: false,
             local_roots: Vec::new(),
             local_browse_root: None,
             compare: None,

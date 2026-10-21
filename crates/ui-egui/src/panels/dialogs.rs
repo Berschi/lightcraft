@@ -273,6 +273,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         Dialog::SamModel { .. } => "Download the SAM 3 Model?",
         Dialog::About => "About LightCraft",
         Dialog::Shortcuts => "Keyboard Shortcuts",
+        Dialog::QuickMove { .. } => "Assign Destination Subfolder (M)",
+        Dialog::QuickTags { .. } => "Quick Tags (T)",
+        Dialog::CropPreview { .. } => "Crop Preview (16:9 / 24:10)",
+        Dialog::ConvertScreenshots { .. } => "Convert Screenshot Filenames",
+        Dialog::MyStuffPigallery { .. } => "Add PiGallery2 URL to MyStuff",
     }
     .to_string();
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::symmetric(16, 12));
@@ -315,6 +320,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
+            Dialog::QuickMove { .. } | Dialog::QuickTags { .. } => 500.0,
+            Dialog::CropPreview { .. } => 600.0,
+            Dialog::ConvertScreenshots { .. } | Dialog::MyStuffPigallery { .. } => 680.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -1316,7 +1324,62 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 }
                 Dialog::Shortcuts => crate::panels::keymap::body(app, ui, &t),
                 Dialog::Print => crate::print_view::body(app, ui, &t),
+                Dialog::QuickMove { subfolder, cursor, fresh } => {
+                    super::organizer::show_quick_move_dialog(app, ctx, ui, subfolder, cursor, fresh, &mut close);
+                }
+                Dialog::QuickTags { text, cursor, fresh } => {
+                    super::organizer::show_quick_tags_dialog(app, ctx, ui, text, cursor, fresh, &mut close);
+                }
+                Dialog::CropPreview { aspect, index } => {
+                    super::organizer::show_crop_preview_dialog(app, ctx, ui, aspect, index, &mut close);
+                }
+                Dialog::ConvertScreenshots { from_pattern, to_pattern, hide_unrenamed, all_visible } => {
+                    super::organizer::show_convert_screenshots_dialog(
+                        app,
+                        ctx,
+                        ui,
+                        from_pattern,
+                        to_pattern,
+                        hide_unrenamed,
+                        all_visible,
+                        &mut close,
+                    );
+                }
+                Dialog::MyStuffPigallery {
+                    host,
+                    pigallery_url,
+                    games,
+                    selected_game,
+                    game_filter,
+                    media,
+                    error,
+                    loaded_host,
+                } => {
+                    super::organizer::show_mystuff_pigallery_dialog(
+                        app,
+                        ctx,
+                        ui,
+                        host,
+                        pigallery_url,
+                        games,
+                        selected_game,
+                        game_filter,
+                        media,
+                        error,
+                        loaded_host,
+                        &mut close,
+                    );
+                }
             });
+            let custom_buttons = matches!(
+                dlg,
+                Dialog::QuickMove { .. }
+                    | Dialog::QuickTags { .. }
+                    | Dialog::CropPreview { .. }
+                    | Dialog::ConvertScreenshots { .. }
+                    | Dialog::MyStuffPigallery { .. }
+            );
+            if !custom_buttons {
             ui.add_space(4.0);
             // the confirm on the right with Cancel to its left (macOS and GNOME's order), filled with
             // the accent when it is the dialog's primary action. The row spans the width the window
@@ -1426,6 +1489,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
             });
+            }
             if import {
                 crate::import::note_dialog_bottom(ui);
             }
@@ -1935,6 +1999,28 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
+        Dialog::QuickMove { subfolder, .. } => {
+            let sub = if subfolder.trim().is_empty() { "." } else { subfolder.trim() };
+            app.run("organizer.stageSubfolder", json!({"subfolder": sub}))
+        }
+        Dialog::QuickTags { text, .. } => {
+            if !text.trim().is_empty() {
+                app.run("keyword.add", json!({"keyword": text.trim()}))
+            } else {
+                Ok(serde_json::Value::Null)
+            }
+        }
+        Dialog::CropPreview { aspect, .. } => app.run("crop.aspect", json!({"aspect": aspect, "selection": true})),
+        Dialog::ConvertScreenshots { from_pattern, to_pattern, all_visible, .. } => {
+            app.run("organizer.convertScreenshots", json!({"fromPattern": from_pattern, "toPattern": to_pattern, "allVisible": all_visible}))
+        }
+        Dialog::MyStuffPigallery { host, games, selected_game, media, .. } => {
+            if let Some(g) = games.get(*selected_game) {
+                app.run("organizer.mystuffSaveMedia", json!({"host": host, "gameId": g.id, "media": media}))
+            } else {
+                Err("No game selected".into())
+            }
+        }
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } => Ok(serde_json::Value::Null),
     }
 }

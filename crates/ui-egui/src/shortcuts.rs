@@ -541,6 +541,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("view.infoOverlay", json!({}));
                 continue;
             }
+            // M: Masking while editing in Detail view; in the grids or fullscreen preview, opens Quick Move (Assign Destination Subfolder)
+            if f == "panel.masking"
+                && (matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) || app.ui.fullscreen)
+            {
+                let _ = app.run("dialog.quickMove", json!({}));
+                continue;
+            }
             // Delete acts on what's being edited: the active mask in the Masking panel; never the
             // photo while retouching (spots are removed from their own panel).
             if f == "photo.delete" {

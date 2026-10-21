@@ -897,6 +897,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(why) = photo.preview_only.as_deref().filter(|_| !fullscreen) {
         preview_only_pill(ui, canvas, why);
     }
+    super::organizer::loupe_subfolder_badge(app, ui, id, canvas);
     resp.context_menu(|ui| {
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {

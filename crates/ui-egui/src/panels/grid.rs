@@ -173,6 +173,9 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if app.ui.filter_bar {
         super::filterbar::show(app, ui);
     }
+    if super::organizer::should_show_bar(app) {
+        super::organizer::bar(app, ui);
+    }
     app.canvas_rect = Some(ui.max_rect());
     if ids.is_empty() {
         if !chips.is_empty() {
@@ -755,6 +758,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if photo.flag == Flag::Reject {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
+    super::organizer::cell_subfolder_badge(app, ui, id, img_rect, square);
     // interaction
     if let Some(k) = app.ui.keyword_painter.clone() {
         // painting: a click toggles the keyword on this photo
@@ -1145,6 +1149,41 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
         let _ = app.run("dialog.rename", json!({}));
     }
+    crate::widgets::menu_button(ui, crate::i18n::tr("Media Organizer"), |ui| {
+        if ui.button("Assign Subfolder… (M)").clicked() {
+            let _ = app.run("dialog.quickMove", json!({}));
+        }
+        let staged_n = app.session.organizer.staged_moves.len();
+        if ui.add_enabled(staged_n > 0, egui::Button::new(format!("Move Staged Images ({staged_n})"))).clicked() {
+            match app.run("organizer.moveImages", json!({})) {
+                Ok(r) => {
+                    let n = r.get("moved").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                    app.toast(ui.ctx(), format!("Moved {n} photo{} to target folder", if n == 1 { "" } else { "s" }));
+                }
+                Err(e) => app.toast_error(ui.ctx(), e),
+            }
+        }
+        if ui.button("Quick Tags… (T)").clicked() {
+            let _ = app.run("dialog.quickTags", json!({}));
+        }
+        ui.separator();
+        if ui.button("Crop to 16:9").clicked() {
+            let _ = app.run("crop.aspect", json!({"aspect": "16x9", "selection": true}));
+        }
+        if ui.button("Crop to 24:10").clicked() {
+            let _ = app.run("crop.aspect", json!({"aspect": "24x10", "selection": true}));
+        }
+        if ui.button("Crop Preview (16:9 / 24:10)…").clicked() {
+            let _ = app.run("dialog.cropPreview", json!({"aspect": "16x9"}));
+        }
+        ui.separator();
+        if ui.button("Convert Screenshot Filenames…").clicked() {
+            let _ = app.run("dialog.convertScreenshots", json!({}));
+        }
+        if ui.button("Add PiGallery2 URL to MyStuff…").clicked() {
+            let _ = app.run("dialog.mystuffPigallery", json!({}));
+        }
+    });
     let can_pick = app.services.pick_folder.is_some() || app.services.picker.is_some();
     if can_pick && ui.button(crate::i18n::tr("Move to Folder…")).clicked() {
         // the folder dialog goes through the shared picker (off the UI thread where the host has

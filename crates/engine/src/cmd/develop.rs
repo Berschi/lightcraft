@@ -628,7 +628,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Crop Aspect",
             [],
             None,
-            "{aspect: \"original\"|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|[w,h]}",
+            "{aspect: \"original\"|\"free\"|\"current\" (lock the crop's present shape)|\"toggle\" (lock ↔ free)|\"1x1\"|\"4x5\"|\"8.5x11\"|\"5x7\"|\"2x3\"|\"4x3\"|\"16x9\"|\"16x10\"|\"24x10\"|[w,h], ids?: [photo], selection?: bool}",
             has_active,
             |s, p| {
                 let id = active(s, "crop.aspect")?;
@@ -647,12 +647,13 @@ pub fn specs() -> Vec<CommandSpec> {
                         Ok(())
                     });
                 }
+                let is_original = matches!(p.get("aspect"), Some(Value::String(a)) if a == "original");
                 let aspect = match p.get("aspect") {
                     Some(Value::String(a)) if a == "toggle" => None,
                     Some(Value::String(a)) if a == "free" => None,
                     Some(Value::String(a)) if a == "original" => Some(((w * 100.0) as u32, (h * 100.0) as u32)),
                     Some(Value::String(a)) => {
-                        let (x, y) = a.split_once('x').ok_or_else(|| bad("crop.aspect", "use WxH"))?;
+                        let (x, y) = a.split_once(['x', ':']).ok_or_else(|| bad("crop.aspect", "use WxH"))?;
                         let (x, y): (f64, f64) =
                             (x.parse().map_err(|_| bad("crop.aspect", "bad number"))?, y.parse().map_err(|_| bad("crop.aspect", "bad number"))?);
                         Some(aspect_tuple("crop.aspect", x, y)?)
@@ -663,6 +664,29 @@ pub fn specs() -> Vec<CommandSpec> {
                     },
                     _ => return Err(bad("crop.aspect", "missing aspect")),
                 };
+                let multi = super::names_photos(p) || bool_or(p, "selection", false);
+                if multi {
+                    let ids = s.targets(p)?;
+                    let ops: Vec<Op> = ids
+                        .into_iter()
+                        .filter_map(|tid| {
+                            let mut d = (*s.develop_of(tid)?).clone();
+                            let (tw, th) = crop_dims(s, tid);
+                            let asp = if is_original { Some(((tw * 100.0) as u32, (th * 100.0) as u32)) } else { aspect };
+                            if asp.is_none() {
+                                d.crop.aspect = None;
+                            } else {
+                                set_aspect(&mut d, tw, th, asp);
+                            }
+                            s.develop_op(tid, d, "Crop Aspect")
+                        })
+                        .collect();
+                    let n = ops.len();
+                    if n > 0 {
+                        s.commit("Crop Aspect", Op::Batch { ops })?;
+                    }
+                    return Ok(json!({"changed": n}));
+                }
                 edit(s, "crop.aspect", "Crop Aspect", |d| {
                     if aspect.is_none() {
                         d.crop.aspect = None;

@@ -139,7 +139,7 @@ fn padded(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 }
 
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
-const ASPECT_PRESETS: [(&str, &str); 10] = [
+const ASPECT_PRESETS: [(&str, &str); 11] = [
     ("Free", "free"),
     ("Original", "original"),
     ("1 × 1", "1x1"),
@@ -150,6 +150,7 @@ const ASPECT_PRESETS: [(&str, &str); 10] = [
     ("4 × 3", "4x3"),
     ("16 × 9", "16x9"),
     ("16 × 10", "16x10"),
+    ("24 × 10", "24x10"),
 ];
 
 /// What the aspect button says for the stored lock (`aspect` = width × 100, height × 100):
@@ -232,6 +233,19 @@ fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let locked = app.crop_tool_aspect().is_some();
             if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "toggle"}));
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            let cur = aspect_label(app.crop_tool_aspect(), original);
+            if text_button(ui, "cropQuick16x9", "16:9", cur == "16 × 9").on_hover_text("Crop selected photo(s) to 16:9").clicked() {
+                let _ = app.run("crop.aspect", json!({"aspect": "16x9", "selection": true}));
+            }
+            if text_button(ui, "cropQuick24x10", "24:10", cur == "24 × 10").on_hover_text("Crop selected photo(s) to 24:10").clicked() {
+                let _ = app.run("crop.aspect", json!({"aspect": "24x10", "selection": true}));
+            }
+            if text_button(ui, "cropQuickPreview", "Preview…", false).on_hover_text("Preview 16:9 / 24:10 crop on selected photo(s)").clicked() {
+                let _ = app.run("dialog.cropPreview", json!({"aspect": if cur == "24 × 10" { "24x10" } else { "16x9" }}));
             }
         });
         ui.add_space(6.0);

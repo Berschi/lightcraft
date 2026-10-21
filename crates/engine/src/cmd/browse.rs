@@ -49,6 +49,7 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });
     s.source = LibrarySource::Folder;
+    super::organizer::sync_target_folder_for_source(s);
     s.keep_active_in_view();
     let shown = s.visible().len();
     Ok(json!({
