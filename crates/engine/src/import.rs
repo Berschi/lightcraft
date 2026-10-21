@@ -1064,17 +1064,26 @@ impl ImportJob {
             // and names the copy when the file itself has none
             let raw = info.kind == MediaKind::Raw;
             let has_embedded_xmp = raw || matches!(info.format.to_ascii_uppercase().as_str(), "JPEG" | "JPG" | "TIFF" | "TIF" | "PNG" | "WEBP");
-            let packet = crate::sidecar::find_sidecar(&path, self.naming)
-                .and_then(|f| std::fs::read_to_string(f).ok())
-                .or_else(|| info.xmp.clone().filter(|_| has_embedded_xmp));
+            let sidecar_file = crate::sidecar::find_sidecar(&path, self.naming).and_then(|f| std::fs::read_to_string(f).ok());
+            let from_file = sidecar_file.is_none();
+            let packet = sidecar_file.or_else(|| info.xmp.clone().filter(|_| has_embedded_xmp));
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
-            let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
+            let mut sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
                 Ok(sc) => Some(sc),
                 Err(e) => {
                     log::warn!("import {path}: XMP: {e}");
                     None
                 }
             });
+            // Embedded XMP on a rendered file (JPEG, TIFF, PNG, WebP) has develop adjustments
+            // already baked into the pixels; only raws/DNGs keep foreign develop settings from embedded XMP.
+            if from_file
+                && !raw
+                && let Some(sc) = &mut sidecar
+            {
+                sc.develop = None;
+                sc.warnings.clear();
+            }
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }

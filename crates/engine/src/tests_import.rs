@@ -1920,3 +1920,28 @@ fn import_preserves_exif_rating_when_xmp_has_unrelated_rating_text() {
 
     let _ = std::fs::remove_dir_all(&src);
 }
+
+#[test]
+fn import_rendered_file_ignores_embedded_develop_settings() {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // A JPEG with embedded XMP containing rating and crs:Exposure2012="+1.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="3" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("rendered_with_crs.jpg"), &bytes).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("rendered_with_crs.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating is imported from embedded XMP
+    assert_eq!(p.rating, 3);
+    // Develop settings from embedded XMP are ignored for rendered files (already baked into pixels)
+    assert_eq!(p.develop.light.exposure, 0.0);
+    assert_eq!(p.develop, std::sync::Arc::new(p.camera_defaults()));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
