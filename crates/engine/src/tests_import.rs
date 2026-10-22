@@ -2208,7 +2208,7 @@ fn import_preserves_exif_rating_when_xmp_has_unrelated_rating_text() {
     let px = [128u8; 40 * 30 * 3];
 
     let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata { rating: Some(5), ..Default::default() });
-    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rating guide</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><exif:ISOSpeedRatings><rdf:Seq><rdf:li>100</rdf:li></rdf:Seq></exif:ISOSpeedRatings><dc:description><rdf:Alt><rdf:li xml:lang="x-default">Rating guide mentioning xmp:Rating</rdf:li></rdf:Alt></dc:description></rdf:Description></rdf:RDF></x:xmpmeta>"#;
     let meta = EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ..Default::default() };
     let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
     std::fs::write(src.join("iso_and_desc_rating.jpg"), &bytes).unwrap();
