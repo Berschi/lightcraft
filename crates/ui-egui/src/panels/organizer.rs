@@ -1328,7 +1328,7 @@ mod tests {
         assert_eq!(app.session.organizer.staged_moves.len(), 2);
 
         // Batch crop both selected photos to 24:10
-        app.run("crop.aspect", json!({"aspect": "24x10", "selection": true})).unwrap();
+        app.run("crop.aspect", json!({"aspect": "24x10", "orientation": "given", "selection": true})).unwrap();
         for id in &ids {
             let d = app.session.develop_of(PhotoId(*id)).unwrap();
             assert_eq!(d.crop.aspect, Some((2400, 1000)));
