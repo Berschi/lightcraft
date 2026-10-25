@@ -15,6 +15,7 @@ serde = { workspace = true }
 quick-xml = { workspace = true }
 chrono = { workspace = true }
 crc32fast = { workspace = true }
+miniz_oxide = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

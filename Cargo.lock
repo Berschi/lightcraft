@@ -3394,6 +3394,7 @@ dependencies = [
  "crc32fast",
  "lightcraft-geom",
  "lightcraft-tiff",
+ "miniz_oxide 0.8.9",
  "proptest",
  "quick-xml 0.38.4",
  "serde",

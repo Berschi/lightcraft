@@ -3,7 +3,7 @@
 
 use crate::Session;
 use crate::export::{ExportFormat, ExportOptions, MetadataPolicy, export_photo};
-use crate::sidecar::{OWNED, OWNED_IF_STATED, sidecar_packet};
+use crate::sidecar::{OWNED, OWNED_IF_STATED, file_packet, flat_tags};
 use lightcraft_catalog::{Op, PhotoId, Source};
 use lightcraft_meta::MergeRules;
 use std::path::Path;
@@ -11,6 +11,10 @@ use std::sync::Arc;
 
 /// JPEG quality of a baked edit: high enough that the re-encode is close to invisible.
 const BAKE_JPEG_QUALITY: u8 = 95;
+
+/// Properties replaced in a file (on top of [`OWNED`]): the full keyword paths and the flat tag list,
+/// which sidecars don't carry.
+const FILE_OWNED: &[&str] = &["lr:hierarchicalSubject", "digiKam:TagsList"];
 
 /// Whether `path` is a JPEG or PNG, the formats edits and metadata can be written into.
 pub(crate) fn is_bakeable(path: &str) -> bool {
@@ -55,13 +59,15 @@ pub(crate) fn write_into_file(s: &mut Session, id: PhotoId, path: &Path) -> std:
         packet_photo.history.clear();
         packet_photo.history_cursor = None;
     }
-    let fresh = sidecar_packet(&packet_photo, &s.catalog);
-    let rules = MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+    let fresh = file_packet(&packet_photo, &s.catalog);
+    let owned: Vec<&str> = OWNED.iter().chain(FILE_OWNED.iter()).copied().collect();
+    let rules = MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
     let packet = match lightcraft_meta::embedded(&bytes).xmp {
         Some(old) => lightcraft_meta::merge_xmp(&old, &fresh, rules).map_err(|e| format!("the file's XMP can't be merged: {e}"))?,
         None => fresh,
     };
     let out = lightcraft_meta::set_xmp(&bytes, &packet).map_err(str::to_string)?;
+    let out = lightcraft_meta::set_iptc_keywords(&out, &flat_tags(&packet_photo.meta.keywords)).map_err(str::to_string)?;
 
     lightcraft_catalog::safe_file::write_atomic(path, &out).map_err(|e| format!("write {}: {e}", path.display()))?;
 
@@ -144,6 +150,51 @@ mod tests {
         let baked = std::fs::read(dir.join("Fotos/2026/shot.jpg")).unwrap();
         let xmp = lightcraft_meta::embedded(&baked).xmp.unwrap();
         assert!(xmp.contains("Fresh") && xmp.contains("café"), "{xmp}");
+    }
+
+    #[test]
+    fn moved_jpeg_gets_the_media_organizer_tag_fields() {
+        let dir = scratch("fields");
+        let (bytes, w, h) = demo_jpeg();
+        let src = dir.join("shot.jpg");
+        std::fs::write(&src, &bytes).unwrap();
+        let mut s = session_with_file(&src, "shot.jpg", "JPG", w, h);
+        s.execute("photo.setMeta", &json!({"addKeywords": ["Reisen|Lissabon", "Essen"]})).unwrap();
+
+        let moved = move_to(&mut s, &dir.join("Fotos"), "2026");
+
+        assert_eq!(moved["imagesWritten"], 1, "{moved}");
+        let baked = std::fs::read(dir.join("Fotos/2026/shot.jpg")).unwrap();
+        let embedded = lightcraft_meta::embedded(&baked);
+        let xmp = embedded.xmp.clone().unwrap();
+        assert!(xmp.contains("digiKam:TagsList"), "{xmp}");
+        let read = lightcraft_meta::parse_xmp(&xmp).unwrap().metadata;
+        assert_eq!(read.keywords, vec!["Lissabon", "Essen"]);
+        assert_eq!(read.hierarchical_keywords, vec!["Reisen|Lissabon", "Essen"]);
+        let iptc = lightcraft_meta::parse_iptc(&embedded.iptc.unwrap());
+        assert_eq!(iptc.keywords, vec!["Lissabon", "Essen"]);
+    }
+
+    #[test]
+    fn moved_png_gets_its_tags_in_xmp() {
+        let dir = scratch("png");
+        let mut demo = Session::with_demo();
+        let id = demo.active().unwrap();
+        let opts = crate::export::ExportOptions { format: ExportFormat::Png, ..Default::default() };
+        let exported = export_photo(&mut demo, id, &opts, 0).unwrap();
+        let src = dir.join("shot.png");
+        std::fs::write(&src, &exported.bytes).unwrap();
+        let mut s = session_with_file(&src, "shot.png", "PNG", u32::try_from(exported.width).unwrap(), u32::try_from(exported.height).unwrap());
+        s.execute("photo.setMeta", &json!({"addKeywords": ["Reisen|Lissabon"]})).unwrap();
+
+        let moved = move_to(&mut s, &dir.join("Fotos"), "2026");
+
+        assert_eq!(moved["imagesWritten"], 1, "{moved}");
+        let baked = std::fs::read(dir.join("Fotos/2026/shot.png")).unwrap();
+        let xmp = lightcraft_meta::embedded(&baked).xmp.unwrap();
+        let read = lightcraft_meta::parse_xmp(&xmp).unwrap().metadata;
+        assert_eq!(read.keywords, vec!["Lissabon"]);
+        assert_eq!(read.hierarchical_keywords, vec!["Reisen|Lissabon"]);
     }
 
     #[test]

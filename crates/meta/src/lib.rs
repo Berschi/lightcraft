@@ -20,6 +20,7 @@ pub mod focus;
 mod focus_read;
 mod gpx;
 mod iptc;
+mod iptc_write;
 pub mod mrw;
 mod psd;
 pub mod tags;
@@ -28,7 +29,7 @@ mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
-pub use embed::set_xmp;
+pub use embed::{set_iptc_keywords, set_xmp};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use focus::FocusPoint;
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
@@ -143,6 +144,10 @@ pub struct Metadata {
     pub keywords: Vec<String>,
     /// Hierarchical keywords, `|`-separated paths (`lr:hierarchicalSubject` convention).
     pub hierarchical_keywords: Vec<String>,
+    /// Flat tag list written to `digiKam:TagsList` (media_organizer's `XMP:TagsList`). Write-only: it is set
+    /// when building a file packet and never read back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tag_list: Vec<String>,
     /// -1 = rejected, 0 = unrated, 1..=5 stars.
     pub rating: Option<i8>,
     /// Colour label name (e.g. "Red").

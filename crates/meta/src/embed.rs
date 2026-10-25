@@ -1,9 +1,18 @@
-//! Replacing the XMP packet of a JPEG or PNG file in place. Every other segment, chunk and the
-//! compressed pixel data are copied byte for byte, so nothing is re-encoded.
+//! Replacing the XMP packet and the IPTC keywords of a JPEG or PNG file in place. Every other segment,
+//! chunk and the compressed pixel data are copied byte for byte, so nothing is re-encoded.
+
+use crate::iptc_write::{decode_raw_profile, encode_raw_profile, rewrite_resources};
 
 const JPEG_XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+const JPEG_PHOTOSHOP_SIG: &[u8] = b"Photoshop 3.0\0";
+const JPEG_APP13: u8 = 0xed;
 const PNG_SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
 const PNG_XMP_KEY: &[u8] = b"XML:com.adobe.xmp\0";
+const PNG_IPTC_KEY: &[u8] = b"Raw profile type iptc\0";
+/// Largest IPTC profile read back from a PNG; keeps a hostile zlib stream from exhausting memory.
+const MAX_PROFILE_BYTES: usize = 16 << 20;
+const JPEG_TOO_LARGE: &str = "the data is too large for a JPEG segment";
+const PNG_TOO_LARGE: &str = "the data is too large for a PNG chunk";
 
 /// `bytes` with its XMP packet replaced by `packet`. The packet is written as the main XMP
 /// segment of a JPEG (right after SOI and a JFIF APP0 segment, and any extended XMP is kept), or as
@@ -11,26 +20,96 @@ const PNG_XMP_KEY: &[u8] = b"XML:com.adobe.xmp\0";
 /// the packet, and leaves the caller's bytes alone in that case.
 pub fn set_xmp(bytes: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
     if bytes.starts_with(&[0xff, 0xd8]) {
-        set_jpeg_xmp(bytes, packet)
+        let mut payload = JPEG_XMP_SIG.to_vec();
+        payload.extend_from_slice(packet.as_bytes());
+        put_jpeg_segment(bytes, 0xe1, JPEG_XMP_SIG, Some(&payload))
     } else if bytes.starts_with(PNG_SIG) {
-        set_png_xmp(bytes, packet)
+        let mut data = PNG_XMP_KEY.to_vec();
+        // uncompressed, compression method 0, empty language tag, empty translated keyword
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        data.extend_from_slice(packet.as_bytes());
+        put_png_chunk(bytes, b"iTXt", PNG_XMP_KEY, Some(&data))
     } else {
         Err("only JPEG and PNG files can hold XMP in the file")
     }
 }
 
-fn set_jpeg_xmp(b: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
-    let seg_len = JPEG_XMP_SIG
-        .len()
-        .checked_add(packet.len())
-        .and_then(|n| n.checked_add(2))
-        .filter(|&n| n <= usize::from(u16::MAX))
-        .ok_or("the XMP packet is too large for a JPEG segment")?;
+/// `bytes` with the IPTC keywords (the file's own flat tag list, as Photoshop-era tools read it)
+/// replaced by `keywords`; an empty list removes them. Other IPTC records and Photoshop resources
+/// are kept. A JPEG gets them in its APP13 Photoshop segment, a PNG in its `Raw profile type iptc`
+/// text chunk, the form ExifTool writes. Leaves the caller's bytes alone when the file can't carry them.
+pub fn set_iptc_keywords(bytes: &[u8], keywords: &[String]) -> Result<Vec<u8>, &'static str> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        set_jpeg_iptc(bytes, keywords)
+    } else if bytes.starts_with(PNG_SIG) {
+        set_png_iptc(bytes, keywords)
+    } else {
+        Err("only JPEG and PNG files can hold IPTC keywords in the file")
+    }
+}
 
-    // marker segments up to the scan data: (start, end, marker)
-    let mut segs: Vec<(usize, usize, u8)> = Vec::new();
+/// The Photoshop image resources in a PNG's `Raw profile type iptc` chunk, if it has one.
+pub(crate) fn png_iptc_resources(b: &[u8]) -> Result<Option<Vec<u8>>, &'static str> {
+    const BAD: &str = "unreadable IPTC profile in the PNG";
+    let chunks = png_layout(b)?;
+    let mut hits = chunks.iter().filter(|c| c.typ == *b"zTXt" && c.data.starts_with(PNG_IPTC_KEY));
+    let Some(chunk) = hits.next() else {
+        return Ok(None);
+    };
+    if hits.next().is_some() {
+        return Err("several IPTC profiles in the PNG");
+    }
+    let (&method, z) = chunk.data.get(PNG_IPTC_KEY.len()..).and_then(|r| r.split_first()).ok_or(BAD)?;
+    if method != 0 {
+        return Err(BAD);
+    }
+    let text = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(z, MAX_PROFILE_BYTES).map_err(|_| BAD)?;
+    decode_raw_profile(&text).map(Some).ok_or(BAD)
+}
+
+fn set_jpeg_iptc(b: &[u8], keywords: &[String]) -> Result<Vec<u8>, &'static str> {
+    let (segs, _) = jpeg_layout(b)?;
+    let mut hits = segs.iter().filter(|s| s.marker == JPEG_APP13 && seg_payload(b, s).starts_with(JPEG_PHOTOSHOP_SIG));
+    let existing = hits.next().copied();
+    if hits.next().is_some() {
+        return Err("several Photoshop segments in the file");
+    }
+    let resources: &[u8] = existing.map_or(&[], |s| seg_payload(b, &s).get(JPEG_PHOTOSHOP_SIG.len()..).unwrap_or_default());
+    let iptc = rewrite_resources(resources, keywords)?;
+    if iptc.is_empty() {
+        return put_jpeg_segment(b, JPEG_APP13, JPEG_PHOTOSHOP_SIG, None);
+    }
+    let mut payload = JPEG_PHOTOSHOP_SIG.to_vec();
+    payload.extend_from_slice(&iptc);
+    put_jpeg_segment(b, JPEG_APP13, JPEG_PHOTOSHOP_SIG, Some(&payload))
+}
+
+fn set_png_iptc(b: &[u8], keywords: &[String]) -> Result<Vec<u8>, &'static str> {
+    let resources = png_iptc_resources(b)?.unwrap_or_default();
+    let iptc = rewrite_resources(&resources, keywords)?;
+    if iptc.is_empty() {
+        return put_png_chunk(b, b"zTXt", PNG_IPTC_KEY, None);
+    }
+    let mut data = PNG_IPTC_KEY.to_vec();
+    // compression method 0 (deflate), then the zlib stream of the hex-encoded profile
+    data.push(0);
+    data.extend_from_slice(&miniz_oxide::deflate::compress_to_vec_zlib(&encode_raw_profile(&iptc), 6));
+    put_png_chunk(b, b"zTXt", PNG_IPTC_KEY, Some(&data))
+}
+
+/// A JPEG marker segment: its offsets (marker bytes included) and marker code.
+#[derive(Clone, Copy)]
+struct JpegSeg {
+    start: usize,
+    end: usize,
+    marker: u8,
+}
+
+/// The marker segments before the scan data, and the offset where the scan data starts.
+fn jpeg_layout(b: &[u8]) -> Result<(Vec<JpegSeg>, usize), &'static str> {
+    let mut segs = Vec::new();
     let mut i = 2usize;
-    let scan = loop {
+    loop {
         let marker = match b.get(i..i + 2) {
             Some(&[0xff, m]) => m,
             _ => return Err("malformed JPEG marker"),
@@ -44,7 +123,7 @@ fn set_jpeg_xmp(b: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
                 i += 2;
                 continue;
             }
-            0xd9 | 0xda => break i,
+            0xd9 | 0xda => return Ok((segs, i)),
             _ => {}
         }
         let len = match b.get(i + 2..i + 4) {
@@ -55,31 +134,37 @@ fn set_jpeg_xmp(b: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
             return Err("malformed JPEG segment");
         }
         let end = i.checked_add(2 + len).filter(|&e| e <= b.len()).ok_or("truncated JPEG segment")?;
-        segs.push((i, end, marker));
+        segs.push(JpegSeg { start: i, end, marker });
         i = end;
-    };
+    }
+}
 
-    // a JFIF APP0 must stay first
+/// A segment's payload: the bytes after its marker and length field.
+fn seg_payload<'a>(b: &'a [u8], s: &JpegSeg) -> &'a [u8] {
+    b.get(s.start + 4..s.end).unwrap_or_default()
+}
+
+/// `b` with every segment of `marker` whose payload starts with `sig` removed, and `payload` (which
+/// starts with `sig` too) added as a new one after SOI and any JFIF APP0. `None` only removes.
+fn put_jpeg_segment(b: &[u8], marker: u8, sig: &[u8], payload: Option<&[u8]>) -> Result<Vec<u8>, &'static str> {
+    let (segs, scan) = jpeg_layout(b)?;
     let insert_at = match segs.first() {
-        Some(&(2, end, 0xe0)) => end,
+        Some(s) if s.start == 2 && s.marker == 0xe0 => s.end,
         _ => 2,
     };
-    let head = b.get(..insert_at).ok_or("truncated JPEG")?;
-    let mut out = Vec::with_capacity(b.len() + seg_len + 2);
-    out.extend_from_slice(head);
-    out.extend_from_slice(&[0xff, 0xe1]);
-    out.extend_from_slice(&u16::try_from(seg_len).map_err(|_| "the XMP packet is too large for a JPEG segment")?.to_be_bytes());
-    out.extend_from_slice(JPEG_XMP_SIG);
-    out.extend_from_slice(packet.as_bytes());
-    for &(start, end, marker) in &segs {
-        if start < insert_at {
+    let mut out = Vec::with_capacity(b.len() + payload.map_or(0, <[u8]>::len) + 4);
+    out.extend_from_slice(b.get(..insert_at).ok_or("truncated JPEG")?);
+    if let Some(payload) = payload {
+        let len = payload.len().checked_add(2).and_then(|n| u16::try_from(n).ok()).ok_or(JPEG_TOO_LARGE)?;
+        out.extend_from_slice(&[0xff, marker]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(payload);
+    }
+    for s in &segs {
+        if s.start < insert_at || (s.marker == marker && seg_payload(b, s).starts_with(sig)) {
             continue;
         }
-        let payload = b.get(start + 4..end).unwrap_or_default();
-        if marker == 0xe1 && payload.starts_with(JPEG_XMP_SIG) {
-            continue;
-        }
-        out.extend_from_slice(b.get(start..end).ok_or("truncated JPEG segment")?);
+        out.extend_from_slice(b.get(s.start..s.end).ok_or("truncated JPEG segment")?);
     }
     out.extend_from_slice(b.get(scan..).ok_or("truncated JPEG")?);
     Ok(out)
@@ -92,7 +177,8 @@ struct PngChunk<'a> {
     data: &'a [u8],
 }
 
-fn set_png_xmp(b: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
+/// All chunks of a PNG, from IHDR to IEND.
+fn png_layout(b: &[u8]) -> Result<Vec<PngChunk<'_>>, &'static str> {
     let mut chunks: Vec<PngChunk> = Vec::new();
     let mut i = PNG_SIG.len();
     loop {
@@ -107,36 +193,45 @@ fn set_png_xmp(b: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
         }
         i = end;
     }
-    let first = chunks.first().ok_or("truncated PNG")?;
-    if &first.typ != b"IHDR" {
-        return Err("PNG without an IHDR chunk");
+    match chunks.first() {
+        Some(c) if &c.typ == b"IHDR" => Ok(chunks),
+        Some(_) => Err("PNG without an IHDR chunk"),
+        None => Err("truncated PNG"),
     }
-    let insert_at = first.end;
+}
 
-    let mut data = Vec::with_capacity(PNG_XMP_KEY.len() + 4 + packet.len());
-    data.extend_from_slice(PNG_XMP_KEY);
-    // uncompressed, compression method 0, empty language tag, empty translated keyword
-    data.extend_from_slice(&[0, 0, 0, 0]);
-    data.extend_from_slice(packet.as_bytes());
-    let data_len = u32::try_from(data.len()).map_err(|_| "the XMP packet is too large for a PNG chunk")?;
-    let mut crc = crc32fast::Hasher::new();
-    crc.update(b"iTXt");
-    crc.update(&data);
-
-    let mut out = Vec::with_capacity(b.len() + data.len() + 12);
+/// `b` with every chunk of type `typ` whose data starts with `key` removed, and a new chunk with
+/// `data` (which starts with `key` too) added right after IHDR. `None` only removes.
+fn put_png_chunk(b: &[u8], typ: &[u8; 4], key: &[u8], data: Option<&[u8]>) -> Result<Vec<u8>, &'static str> {
+    let chunks = png_layout(b)?;
+    let insert_at = chunks.first().map_or(PNG_SIG.len(), |c| c.end);
+    let mut out = Vec::with_capacity(b.len() + data.map_or(0, <[u8]>::len) + 12);
     out.extend_from_slice(b.get(..insert_at).ok_or("truncated PNG")?);
-    out.extend_from_slice(&data_len.to_be_bytes());
-    out.extend_from_slice(b"iTXt");
-    out.extend_from_slice(&data);
-    out.extend_from_slice(&crc.finalize().to_be_bytes());
+    if let Some(data) = data {
+        out.extend_from_slice(&png_chunk(typ, data)?);
+    }
     for c in chunks.iter().skip(1) {
-        if &c.typ == b"iTXt" && c.data.starts_with(PNG_XMP_KEY) {
+        if &c.typ == typ && c.data.starts_with(key) {
             continue;
         }
         out.extend_from_slice(b.get(c.start..c.end).ok_or("truncated PNG chunk")?);
     }
     let last_end = chunks.last().map_or(insert_at, |c| c.end);
     out.extend_from_slice(b.get(last_end..).unwrap_or_default());
+    Ok(out)
+}
+
+/// A complete PNG chunk: length, type, data and CRC.
+fn png_chunk(typ: &[u8; 4], data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let len = u32::try_from(data.len()).map_err(|_| PNG_TOO_LARGE)?;
+    let mut crc = crc32fast::Hasher::new();
+    crc.update(typ);
+    crc.update(data);
+    let mut out = Vec::with_capacity(data.len() + 12);
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(typ);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&crc.finalize().to_be_bytes());
     Ok(out)
 }
 
@@ -209,5 +304,38 @@ mod tests {
         assert!(set_xmp(b"GIF89a", PACKET).is_err());
         assert!(set_xmp(&[0xff, 0xd8, 0xff, 0xe1, 0x00], PACKET).is_err());
         assert!(set_xmp(PNG_SIG, PACKET).is_err());
+    }
+
+    #[test]
+    fn jpeg_iptc_keywords_round_trip_and_an_empty_list_removes_them() {
+        let kws = vec!["Lisbon".to_string(), "Trip".to_string()];
+        let out = set_iptc_keywords(&jpeg(), &kws).expect("jpeg");
+        let iim = embedded(&out).iptc.expect("IPTC block");
+        assert_eq!(crate::iptc::parse_iptc(&iim).keywords, kws);
+        let cleared = set_iptc_keywords(&out, &[]).expect("jpeg again");
+        assert!(embedded(&cleared).iptc.is_none());
+    }
+
+    #[test]
+    fn png_iptc_keywords_are_stored_in_a_raw_profile_chunk() {
+        let kws = vec!["Lisbon".to_string()];
+        let out = set_iptc_keywords(&png(), &kws).expect("png");
+        let resources = png_iptc_resources(&out).expect("readable").expect("profile present");
+        assert!(resources.windows(b"Lisbon".len()).any(|w| w == b"Lisbon"));
+        let cleared = set_iptc_keywords(&out, &[]).expect("png again");
+        assert_eq!(png_iptc_resources(&cleared), Ok(None));
+    }
+
+    #[test]
+    fn unreadable_photoshop_segment_is_an_error_and_leaves_the_file_alone() {
+        let mut payload = JPEG_PHOTOSHOP_SIG.to_vec();
+        payload.extend_from_slice(b"not an 8BIM block");
+        let bad = put_jpeg_segment(&jpeg(), JPEG_APP13, JPEG_PHOTOSHOP_SIG, Some(&payload)).expect("segment");
+        assert!(set_iptc_keywords(&bad, &["x".to_string()]).is_err());
+    }
+
+    #[test]
+    fn iptc_is_refused_for_other_formats() {
+        assert!(set_iptc_keywords(b"GIF89a", &["x".to_string()]).is_err());
     }
 }

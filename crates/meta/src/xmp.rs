@@ -38,6 +38,8 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("mwg-rs", "http://www.metadataworkinggroup.com/schemas/regions/"),
     ("stArea", "http://ns.adobe.com/xmp/sType/Area#"),
     ("stDim", "http://ns.adobe.com/xap/1.0/sType/Dimensions#"),
+    // Written only into image files: the flat tag list digiKam and media_organizer use (`digiKam:TagsList`).
+    ("digiKam", "http://www.digikam.org/ns/1.0/"),
 ];
 
 /// The camera-raw-settings namespace URI (prefix `crs`), read for interchange only.
@@ -692,6 +694,7 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     array(&mut x, "dc:creator", "Seq", &one(&meta.artist), false);
     array(&mut x, "dc:subject", "Bag", &meta.keywords, false);
     array(&mut x, "lr:hierarchicalSubject", "Bag", &meta.hierarchical_keywords, false);
+    array(&mut x, "digiKam:TagsList", "Seq", &meta.tag_list, false);
     array(&mut x, "exif:ISOSpeedRatings", "Seq", &meta.iso.map(|v| vec![v.to_string()]).unwrap_or_default(), false);
     if let Some(s) = meta.lens_spec {
         array(&mut x, "exifEX:LensSpecification", "Seq", &s.iter().map(|&v| frac(v)).collect::<Vec<_>>(), false);
@@ -760,6 +763,7 @@ mod tests {
             country: Some("France".into()),
             keywords: vec!["tree".into(), "sky & sea".into()],
             hierarchical_keywords: vec!["Places|France|Paris".into()],
+            tag_list: Vec::new(),
             rating: Some(-1),
             label: Some("Green".into()),
         }

@@ -353,8 +353,33 @@ pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
 /// `remove_location` is set (an export with "Remove location info").
 pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool) -> String {
+    packet(p, cat, remove_location, false)
+}
+
+/// The packet written into a JPEG/PNG when "Move Images" bakes a photo: the same fields as
+/// [`sidecar_packet`], but the flat keyword lists hold leaf names only (`Places|Lisbon` → `Lisbon`),
+/// as media_organizer writes them, and the full paths go to `lr:hierarchicalSubject` so the hierarchy
+/// survives a re-import.
+pub fn file_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
+    packet(p, cat, false, true)
+}
+
+/// Leaf names of `keywords` for the flat tag fields: the part after the last `|`, trimmed, empty ones
+/// skipped and duplicates dropped (first occurrence kept).
+pub fn flat_tags(keywords: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for leaf in keywords.iter().filter_map(|k| k.rsplit('|').next()) {
+        let leaf = leaf.trim();
+        if !leaf.is_empty() && !out.iter().any(|x| x == leaf) {
+            out.push(leaf.to_string());
+        }
+    }
+    out
+}
+
+fn packet(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_location: bool, for_file: bool) -> String {
     let nz = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
-    let meta = lightcraft_meta::Metadata {
+    let mut meta = lightcraft_meta::Metadata {
         software: Some("LightCraft".into()),
         title: nz(&p.meta.title),
         caption: nz(&p.meta.caption),
@@ -376,9 +401,14 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         gps: p.meta.gps.map(|(latitude, longitude)| lightcraft_meta::Gps { latitude, longitude, altitude: None }),
         ..Default::default()
     };
-    let mut meta = meta;
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
+    }
+    if for_file {
+        let flat = flat_tags(&p.meta.keywords);
+        meta.keywords = flat.clone();
+        meta.tag_list = flat;
+        meta.hierarchical_keywords = p.meta.keywords.clone();
     }
     let settings = serde_json::to_string(&*p.develop).unwrap_or_default();
     let flag = match p.flag {
