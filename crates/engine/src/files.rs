@@ -126,9 +126,6 @@ pub fn embedded_lens(raw: &lightcraft_raw::RawInfo) -> Option<lightcraft_develop
 }
 
 fn xmp_has_rating(x: &str) -> bool {
-    if x.contains("xmp:Rating") || x.contains("xap:Rating") || x.contains(":Rating=") || x.contains(":Rating>") || x.contains(":Rating ") {
-        return true;
-    }
     lightcraft_meta::parse_xmp(x).ok().and_then(|d| d.metadata.rating).is_some()
 }
 
