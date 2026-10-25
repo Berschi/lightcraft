@@ -3391,6 +3391,7 @@ name = "lightcraft-meta"
 version = "0.13.0"
 dependencies = [
  "chrono",
+ "crc32fast",
  "lightcraft-geom",
  "lightcraft-tiff",
  "proptest",

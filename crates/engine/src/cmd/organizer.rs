@@ -458,6 +458,8 @@ fn remember_recent_subfolder(s: &mut Session, sub: &str) {
 /// Move all staged photos (or the explicitly passed `ids` if staged/subfolder given) into `<targetFolder>/<subfolder>`.
 fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "organizer.moveImages";
+    // The sidecars written above (and the files' own XMP written below) replace automatic writing.
+    s.skip_auto_write = true;
     if s.organizer.target_folder.is_none() {
         sync_target_folder_for_source(s);
     }
@@ -506,15 +508,19 @@ fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "no photos have a destination subfolder assigned (press M to assign a subfolder first)"));
     }
 
-    // Write each file photo's XMP sidecar before it moves, so the sidecar that travels with it holds
-    // its current tags, crops and develop settings even when automatic XMP writing is off. A failure
-    // is reported but does not stop the move.
+    // Write each RAW or other non-JPEG/PNG file photo's XMP sidecar before it moves, so the sidecar
+    // that travels with it holds its current tags, crops and develop settings even when automatic
+    // XMP writing is off. A failure is reported but does not stop the move. JPEG and PNG photos
+    // get their data written into the file after the move instead (see below).
     let ids_to_move: Vec<PhotoId> = pairs.iter().map(|(id, _)| *id).collect();
     let owners = crate::sidecar::StemOwners::among(&s.catalog, &ids_to_move);
     let mut sidecars_failed = Vec::new();
     for id in &ids_to_move {
-        let is_file_original = s.catalog.photo(*id).is_some_and(|ph| ph.copy_of.is_none() && matches!(ph.source, Source::File { .. }));
-        if is_file_original && let Err(e) = s.save_sidecar_with(*id, &owners) {
+        let is_sidecar_original = s
+            .catalog
+            .photo(*id)
+            .is_some_and(|ph| ph.copy_of.is_none() && matches!(&ph.source, Source::File { path } if !crate::bake::is_bakeable(path)));
+        if is_sidecar_original && let Err(e) = s.save_sidecar_with(*id, &owners) {
             sidecars_failed.push(json!({"id": id.0, "error": e.to_string()}));
         }
     }
@@ -561,6 +567,22 @@ fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let moved_count = s.apply_file_plans(&RealFs, &plans, &|n| format!("Move {n} Photo{}", if n == 1 { "" } else { "s" }))?;
+
+    // Each JPEG or PNG now sits at its new path: write its tags and edits into it. One failing file
+    // doesn't stop the others; its photo stays moved, and the error is reported.
+    let mut image_failed = Vec::new();
+    let mut images_written = 0usize;
+    for plan in &plans {
+        let Some(to) = plan.to_path.as_deref() else { continue };
+        if !crate::bake::is_bakeable(to) {
+            continue;
+        }
+        match crate::bake::write_into_file(s, PhotoId(plan.id), Path::new(to)) {
+            Ok(()) => images_written += 1,
+            Err(error) => image_failed.push(json!({"id": plan.id, "error": error})),
+        }
+    }
+
     for (_, sub) in &pairs {
         remember_recent_subfolder(s, sub);
         s.organizer.note_subfolder_created(&target_base, sub);
@@ -576,6 +598,8 @@ fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
         "plans": plans,
         "remainingStaged": s.organizer.staged_moves.len(),
         "sidecarsFailed": sidecars_failed,
+        "imagesWritten": images_written,
+        "imageFailed": image_failed,
     }))
 }
 
@@ -1601,9 +1625,12 @@ mod tests {
         assert!(dest1.exists());
         assert!(dest1_xmp.exists());
         assert!(dest2.exists());
-        // p2 had no sidecar: moving writes one first, so it lands at the destination too.
-        assert!(sub_dir.join("2026-03-15_19.42.09.100_1.xmp").exists());
+        // JPEGs get no sidecar; their metadata goes into the file. These fixtures aren't real JPEGs, so
+        // the write fails, is reported, and the moved files stay byte-for-byte intact.
+        assert!(!sub_dir.join("2026-03-15_19.42.09.100_1.xmp").exists());
         assert_eq!(moved["sidecarsFailed"].as_array().map(Vec::len), Some(0));
+        assert_eq!(moved["imageFailed"].as_array().map(Vec::len), Some(2));
+        assert_eq!(std::fs::read(&dest2).unwrap(), b"fake-jpg-2");
 
         // Undo moves both files and the XMP sidecar back!
         s.execute("edit.undo", &json!({})).unwrap();
