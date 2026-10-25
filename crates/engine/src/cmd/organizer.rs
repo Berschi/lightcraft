@@ -506,6 +506,19 @@ fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "no photos have a destination subfolder assigned (press M to assign a subfolder first)"));
     }
 
+    // Write each file photo's XMP sidecar before it moves, so the sidecar that travels with it holds
+    // its current tags, crops and develop settings even when automatic XMP writing is off. A failure
+    // is reported but does not stop the move.
+    let ids_to_move: Vec<PhotoId> = pairs.iter().map(|(id, _)| *id).collect();
+    let owners = crate::sidecar::StemOwners::among(&s.catalog, &ids_to_move);
+    let mut sidecars_failed = Vec::new();
+    for id in &ids_to_move {
+        let is_file_original = s.catalog.photo(*id).is_some_and(|ph| ph.copy_of.is_none() && matches!(ph.source, Source::File { .. }));
+        if is_file_original && let Err(e) = s.save_sidecar_with(*id, &owners) {
+            sidecars_failed.push(json!({"id": id.0, "error": e.to_string()}));
+        }
+    }
+
     // Build RenamePlans, creating subfolders on disk and resolving collisions with `_1`, `_2`...
     let mut taken: HashSet<String> = HashSet::new();
     let mut plans: Vec<RenamePlan> = Vec::new();
@@ -562,6 +575,7 @@ fn move_images(s: &mut Session, p: &Value) -> Result<Value> {
         "moved": moved_count,
         "plans": plans,
         "remainingStaged": s.organizer.staged_moves.len(),
+        "sidecarsFailed": sidecars_failed,
     }))
 }
 
@@ -1587,6 +1601,9 @@ mod tests {
         assert!(dest1.exists());
         assert!(dest1_xmp.exists());
         assert!(dest2.exists());
+        // p2 had no sidecar: moving writes one first, so it lands at the destination too.
+        assert!(sub_dir.join("2026-03-15_19.42.09.100_1.xmp").exists());
+        assert_eq!(moved["sidecarsFailed"].as_array().map(Vec::len), Some(0));
 
         // Undo moves both files and the XMP sidecar back!
         s.execute("edit.undo", &json!({})).unwrap();
