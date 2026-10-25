@@ -141,8 +141,23 @@ fn paper_label(name: &str) -> String {
         "legal" => "Legal".into(),
         "tabloid" => "Tabloid".into(),
         "custom" => "Custom".into(),
+        // Japanese photo and postcard papers: the customary name and its metric size.
+        "l" => "L判 (89 × 127 mm)".into(),
+        "2l" => "2L判 (127 × 178 mm)".into(),
+        "kg" => "KG判 (102 × 152 mm)".into(),
+        "postcard" => "はがき (100 × 148 mm)".into(),
+        "double-postcard" => "往復はがき (148 × 200 mm)".into(),
+        "6cut" => "六切 (203 × 254 mm)".into(),
+        "4cut" => "四切 (254 × 305 mm)".into(),
+        "business-card" => "名刺 (55 × 91 mm)".into(),
         other => other.replace('x', " × ") + " in",
     }
+}
+
+/// The paper the selector shows as current: `custom`, or the canonical name an alias stands for,
+/// so a `print.set` with `はがき` still selects the `postcard` option.
+fn current_paper(paper: &str) -> &str {
+    if paper.eq_ignore_ascii_case("custom") { "custom" } else { layout::paper_name(paper).unwrap_or(paper) }
 }
 
 /// The dialog's body: the settings column and the page preview side by side.
@@ -197,6 +212,14 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         if text_button(ui, "printSaveTemplate", "Save", false).clicked() && !pu.template_name.trim().is_empty() {
             run(app, &ctx, "print.template.save", json!({"name": pu.template_name}));
         }
+        if app.services.pick_print_templates.is_some() && text_button(ui, "printTemplateImport", "Import…", false).clicked() {
+            let paths = app.services.pick_print_templates.as_mut().map(|pick| pick()).unwrap_or_default();
+            for path in paths {
+                if let Some(r) = run(app, &ctx, "print.template.import", json!({"path": path})) {
+                    app.toast(&ctx, crate::i18n::tr_format!("Imported {name}", name = r["name"].as_str().unwrap_or_default()));
+                }
+            }
+        }
     });
     let names: Vec<String> = app.session.print_templates.iter().map(|t| t.name.clone()).collect();
     for (i, name) in names.iter().enumerate() {
@@ -205,6 +228,15 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if text_button(ui, &format!("printTemplateDelete-{i}"), "Delete", false).clicked() {
                     run(app, &ctx, "print.template.delete", json!({"name": name}));
+                }
+                if app.services.save_print_template.is_some() && text_button(ui, &format!("printTemplateExport-{i}"), "Export…", false).clicked() {
+                    let stem = lightcraft_engine::slide_template::file_stem(name).unwrap_or_else(|| "Print Template".into());
+                    let file = format!("{stem}.{}", lightcraft_engine::print::template::FILE_EXT);
+                    if let Some(path) = app.services.save_print_template.as_mut().and_then(|save| save(&file))
+                        && let Some(r) = run(app, &ctx, "print.template.export", json!({"name": name, "path": path}))
+                    {
+                        app.toast(&ctx, crate::i18n::tr_format!("Exported to {path}", path = r["path"].as_str().unwrap_or_default()));
+                    }
                 }
                 if text_button(ui, &format!("printTemplateApply-{i}"), "Apply", false).clicked() {
                     run(app, &ctx, "print.template.apply", json!({"name": name}));
@@ -374,8 +406,8 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
-        let current = if l.page.paper.eq_ignore_ascii_case("custom") { "custom".to_string() } else { l.page.paper.to_ascii_lowercase() };
-        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(&current)).show_ui(ui, |ui| {
+        let current = current_paper(&l.page.paper);
+        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
                 if ui.selectable_label(current == name, paper_label(name)).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
@@ -856,6 +888,8 @@ fn paint_cell(
             clip.add(egui::Shape::mesh(mesh));
         }
         None => {
+            // the page is paper in every theme (its colour is the print's, not the theme's), so
+            // these stay fixed greys: a photo still to come, and an empty cell
             clip.rect_filled(shown, 0.0, if photo.is_some() { Color32::from_gray(52) } else { Color32::from_gray(200) });
         }
     }
@@ -959,5 +993,17 @@ mod tests {
         assert_eq!(trim(2.5), "2.5");
         assert_eq!(paper_label("a4"), "A4");
         assert_eq!(paper_label("4x6"), "4 × 6 in");
+        // The Japanese photo and postcard papers show their customary name and metric size.
+        assert_eq!(paper_label("l"), "L判 (89 × 127 mm)");
+        assert_eq!(paper_label("postcard"), "はがき (100 × 148 mm)");
+        assert_eq!(paper_label("double-postcard"), "往復はがき (148 × 200 mm)");
+        assert_eq!(paper_label("6cut"), "六切 (203 × 254 mm)");
+        assert_eq!(paper_label("4cut"), "四切 (254 × 305 mm)");
+        // The selector resolves an alias stored by print.set to the canonical option.
+        assert_eq!(current_paper("はがき"), "postcard");
+        assert_eq!(current_paper("L判"), "l");
+        assert_eq!(current_paper("Custom"), "custom");
+        assert_eq!(paper_label(current_paper("はがき")), "はがき (100 × 148 mm)");
+        assert_eq!(paper_label(current_paper("a4")), "A4");
     }
 }

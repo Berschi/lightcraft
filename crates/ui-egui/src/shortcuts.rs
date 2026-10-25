@@ -54,13 +54,28 @@ pub fn find_bindable(id: &str) -> Option<&'static Bindable> {
 
 /// The shortcut `id` has now: the user's choice (`""` = none), else the declared one. An entry
 /// that doesn't parse (a hand-edited `ui.json`, a modifier-only key saved by an older build) is
-/// ignored.
+/// ignored. The declared shortcut yields to a saved entry that gives its key to another known
+/// command other than its contextual partner.
 pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Option<&'a str> {
     match keymap.get(id) {
         Some(sc) if sc.is_empty() => None,
         Some(sc) if parse(sc).is_some() => Some(sc.as_str()),
-        _ => default,
+        _ => default.filter(|sc| !assigned_elsewhere(keymap, id, sc)),
     }
+}
+
+/// Whether the keymap gives the key `sc` to a known command other than `id` and its contextual
+/// partner.
+fn assigned_elsewhere(keymap: &Keymap, id: &str, sc: &str) -> bool {
+    let Some(key) = parse(sc) else { return false };
+    saved_keys(keymap)
+        .any(|(other, k)| other != id && k == key && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == other) || (*y == id && *x == other)))
+}
+
+/// The keys the keymap gives to known commands, with each command's id. Entries for commands this
+/// build doesn't know and entries that don't parse are ignored.
+pub(crate) fn saved_keys(keymap: &Keymap) -> impl Iterator<Item = (&str, (Modifiers, Key))> {
+    keymap.iter().filter(|(id, _)| find_bindable(id).is_some()).filter_map(|(id, sc)| Some((id.as_str(), parse(sc)?)))
 }
 
 /// The effective shortcut of command `id` (`None` for unknown commands).
@@ -68,8 +83,10 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
-/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`].
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect")];
+/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
+/// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
+/// lock under the Crop panel).
+pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
 
 /// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
 pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
@@ -371,8 +388,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // The grid navigation keys act on the photos in view, so they wait while the full-screen preview
     // covers the grid: a key must not move the selection onto photos nobody can see.
     let grid_navigation = grid && !app.ui.fullscreen;
-    // keys the user gave to a command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = keymap.values().filter_map(|s| parse(s)).collect();
+    // keys the user gave to a known command: the fixed bindings below (aliases, ratings) yield to them
+    let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).collect();
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
@@ -443,9 +460,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // Auto Advance then moves on (next candidate in Compare, next photo elsewhere)
     let cull = |app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool| {
         compare::target_active(app, &mut params);
+        let was = app.session.active();
         let ok = app.run(id, params).is_ok();
         if ok && (advance || app.ui.auto_advance) {
-            compare::advance(app);
+            compare::advance(app, was);
         }
     };
     for (id, params) in aliased {
@@ -628,6 +646,13 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
             if f == "crop.rotateAspect" && app.ui.right != crate::state::RightPanel::Crop {
                 continue;
             }
+            // A is both Visualize Spots and the crop aspect lock: each key only in its own context
+            if f == "view.visualizeSpots" && app.ui.right == crate::state::RightPanel::Crop {
+                continue;
+            }
+            if f == "crop.lockAspect" && app.ui.right != crate::state::RightPanel::Crop {
+                continue;
+            }
             // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
             if f == "view.filmstrip" && app.ui.right == crate::state::RightPanel::Remove && app.session.active_spot.is_some() {
                 let _ = app.run("spot.refreshSource", json!({}));
@@ -638,12 +663,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("view.maskOverlayColor", json!({}));
                 continue;
             }
-            // while cropping: O cycles the guides, Shift+O their orientation, A locks the aspect
+            // while cropping: O cycles the guides, Shift+O their orientation
             if app.ui.right == crate::state::RightPanel::Crop {
                 let crop_key = match f.as_str() {
                     "view.maskOverlay" => Some(("view.cropOverlay", json!({}))),
                     "view.cropOverlay" => Some(("view.cropOverlayOrientation", json!({}))),
-                    "view.visualizeSpots" => Some(("crop.aspect", json!({"aspect": "toggle"}))),
                     _ => None,
                 };
                 if let Some((cmd, p)) = crop_key {
@@ -826,6 +850,50 @@ mod tests {
         }
     }
 
+    /// A saved keymap entry that gives a key to one command (kept from before another command
+    /// declared that key) wins: the press runs that command alone, and the other command's declared
+    /// key comes back once the entry is gone.
+    #[test]
+    fn a_saved_key_wins_over_another_commands_declared_key() {
+        use lightcraft_catalog::{Flag, PhotoId};
+        let mut h = library();
+        h.app.ui.settings.keymap.insert("photo.increaseRating".into(), "P".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), None);
+        assert_eq!(super::conflicts(&h.app.ui.settings.keymap, "view.survey", "P"), vec!["photo.increaseRating"]);
+        key(&mut h, "P", false);
+        let photo = h.app.session.catalog.photo(PhotoId(1)).unwrap();
+        assert_eq!(photo.rating, 1, "the saved key raised the rating");
+        assert_eq!(photo.flag, Flag::None, "Flag as Pick's declared key yielded");
+        // with the entry gone, P picks again
+        h.app.ui.settings.keymap.remove("photo.increaseRating");
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.pick"), Some("P"));
+        key(&mut h, "P", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Pick);
+        // a contextual partner's saved key does not silence the other side
+        h.app.ui.settings.keymap.insert("crop.rotateAspect".into(), "X".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.reject"), Some("X"));
+        // nor does an entry for a command this build doesn't know
+        h.app.ui.settings.keymap.insert("no.suchCommand".into(), "U".into());
+        assert_eq!(super::shortcut_of(&h.app.ui.settings.keymap, "photo.unflag"), Some("U"));
+    }
+
+    /// Keymap entries for commands this build doesn't know take no key: an alias, a rating key and
+    /// a declared shortcut on the same keys keep working.
+    #[test]
+    fn junk_keymap_entries_leave_aliases_ratings_and_declared_keys() {
+        use lightcraft_catalog::{Flag, PhotoId};
+        let mut h = library();
+        for (id, sc) in [("no.suchCommand", "Shift+X"), ("no.otherCommand", "5"), ("no.thirdCommand", "P")] {
+            h.app.ui.settings.keymap.insert(id.into(), sc.into());
+        }
+        key(&mut h, "5", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().rating, 5, "5 still rates");
+        key(&mut h, "P", false);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Pick, "P still picks");
+        key(&mut h, "X", true);
+        assert_eq!(h.app.session.catalog.photo(PhotoId(1)).unwrap().flag, Flag::Reject, "Shift+X still rejects");
+    }
+
     #[test]
     fn classic_f6_and_f7_toggle_the_filmstrip_and_left_panel() {
         let mut h = library();
@@ -929,6 +997,38 @@ mod tests {
             key(&mut h, k, false);
             assert_eq!(h.app.session.active(), Some(PhotoId(2)), "{k}");
         }
+    }
+
+    #[test]
+    fn culling_keys_go_on_from_a_photo_that_leaves_the_filter() {
+        // #2312: the filter shows one-star photos; taking photo 2's star off makes photo 3 active, once, with or
+        // without Shift and Auto Advance, and → goes on from there instead of from the first photo
+        use lightcraft_catalog::PhotoId;
+        let one_star = || {
+            let mut h = library();
+            h.app.session.execute("library.selectAll", &json!({})).unwrap();
+            h.app.session.execute("photo.rate", &json!({"rating": 1})).unwrap();
+            h.app.session.execute("library.filter", &json!({"rating": 1, "ratingOp": "exactly"})).unwrap();
+            h.app.session.execute("library.select", &json!({"ids": [2]})).unwrap();
+            h
+        };
+        for view in [crate::state::ViewMode::PhotoGrid, crate::state::ViewMode::Detail] {
+            for (shift, auto) in [(false, false), (true, false), (false, true), (true, true)] {
+                let mut h = one_star();
+                h.app.ui.view = view;
+                h.app.ui.auto_advance = auto;
+                key(&mut h, "0", shift);
+                assert_eq!(h.app.session.catalog.photo(PhotoId(2)).unwrap().rating, 0);
+                assert_eq!(h.app.session.active(), Some(PhotoId(3)), "{view:?} Shift={shift} Auto Advance={auto}");
+                key(&mut h, "right", false);
+                assert_eq!(h.app.session.active(), Some(PhotoId(4)), "{view:?} Shift={shift} Auto Advance={auto}");
+            }
+        }
+        // the Photo menu with Auto Advance too
+        let mut h = one_star();
+        h.app.ui.auto_advance = true;
+        crate::menubar::run_item(&mut h.app, "photo.rate", json!({"rating": 0})).unwrap();
+        assert_eq!(h.app.session.active(), Some(PhotoId(3)));
     }
 
     #[test]
@@ -1135,7 +1235,8 @@ mod tests {
         }
         for (i, (k, a)) in ui.iter().enumerate() {
             for (k2, b) in &ui[i + 1..] {
-                assert!(k != k2, "{a} and {b} share a key");
+                let contextual = CONTEXTUAL.iter().any(|(x, y)| (x == a && y == b) || (x == b && y == a));
+                assert!(k != k2 || contextual, "{a} and {b} share a key");
             }
         }
         for (i, (k, a)) in engine.iter().enumerate() {
