@@ -650,6 +650,8 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     push("xmp:Label", meta.label.clone());
     push("exif:DateTimeOriginal", meta.capture_time.map(|d| d.to_iso()));
     push("photoshop:DateCreated", meta.capture_time.map(|d| d.to_iso()));
+    push("xmp:CreateDate", meta.capture_time.map(|d| d.to_iso()));
+    push("xmp:ModifyDate", meta.capture_time.map(|d| d.to_iso()));
     push("exif:ExposureTime", meta.exposure_time.map(frac));
     push("exif:FNumber", meta.f_number.map(frac));
     push("exif:FocalLength", meta.focal_length.map(frac));

@@ -1596,7 +1596,7 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
     let keywords = catalog.export_keywords(&m.keywords);
     out.keywords = keywords.flat;
     out.hierarchical_keywords = keywords.hierarchical;
-    out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_iso);
+    out.capture_time = photo.captured.as_deref().and_then(DateTime::parse_lenient);
     out.rating = (photo.rating > 0).then_some(photo.rating as i8);
     // Pixels are exported upright: orientation is baked in.
     out.orientation = Some(lightcraft_meta::Orientation::Normal);

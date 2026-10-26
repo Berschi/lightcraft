@@ -680,14 +680,14 @@ impl ScreenshotPattern {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ParsedTimestamp {
-    year: u32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-    millis: u32,
+pub(crate) struct ParsedTimestamp {
+    pub(crate) year: u32,
+    pub(crate) month: u32,
+    pub(crate) day: u32,
+    pub(crate) hour: u32,
+    pub(crate) minute: u32,
+    pub(crate) second: u32,
+    pub(crate) millis: u32,
 }
 
 fn parse_digits(s: &str, range: std::ops::Range<usize>) -> Option<u32> {
@@ -707,7 +707,7 @@ fn valid_ymd_hms(y: u32, m: u32, d: u32, h: u32, min: u32, sec: u32) -> bool {
 }
 
 /// Match `stem` against `pattern` and extract its timestamp when convertible.
-fn match_pattern(stem: &str, pattern: ScreenshotPattern) -> Option<ParsedTimestamp> {
+pub(crate) fn match_pattern(stem: &str, pattern: ScreenshotPattern) -> Option<ParsedTimestamp> {
     match pattern {
         ScreenshotPattern::SharexSpectacle => {
             // `\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}.\d{3}` (length 23)

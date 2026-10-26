@@ -29,7 +29,7 @@ mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use datetime::DateTime;
-pub use embed::{set_iptc_keywords, set_xmp};
+pub use embed::{set_exif, set_iptc_keywords, set_xmp};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};

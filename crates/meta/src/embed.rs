@@ -4,6 +4,7 @@
 use crate::iptc_write::{decode_raw_profile, encode_raw_profile, rewrite_resources};
 
 const JPEG_XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+const JPEG_EXIF_SIG: &[u8] = b"Exif\0\0";
 const JPEG_PHOTOSHOP_SIG: &[u8] = b"Photoshop 3.0\0";
 const JPEG_APP13: u8 = 0xed;
 const PNG_SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
@@ -31,6 +32,20 @@ pub fn set_xmp(bytes: &[u8], packet: &str) -> Result<Vec<u8>, &'static str> {
         put_png_chunk(bytes, b"iTXt", PNG_XMP_KEY, Some(&data))
     } else {
         Err("only JPEG and PNG files can hold XMP in the file")
+    }
+}
+
+/// `bytes` with its EXIF block replaced by `exif_block` (a TIFF-structured Exif block, without
+/// the `Exif\0\0` prefix).
+pub fn set_exif(bytes: &[u8], exif_block: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        let mut payload = JPEG_EXIF_SIG.to_vec();
+        payload.extend_from_slice(exif_block);
+        put_jpeg_segment(bytes, 0xe1, JPEG_EXIF_SIG, Some(&payload))
+    } else if bytes.starts_with(PNG_SIG) {
+        put_png_chunk(bytes, b"eXIf", b"", Some(exif_block))
+    } else {
+        Err("only JPEG and PNG files can hold EXIF in the file")
     }
 }
 

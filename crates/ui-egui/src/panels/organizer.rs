@@ -71,32 +71,59 @@ pub fn open_convert_screenshots(app: &mut LightcraftApp) {
 pub fn open_mystuff_pigallery(app: &mut LightcraftApp) {
     sync_target_folder_for_source(&mut app.session);
     let src = current_source_folder(&app.session);
-    let folder = app.session.organizer.target_folder.clone().or(src);
+
+    // Find the destination subfolder of the images in the current folder / view
+    let staged_sub = {
+        let active_id = app.session.active();
+        let active_sub = active_id.and_then(|id| app.session.organizer.staged_moves.get(&id)).cloned();
+        if active_sub.is_some() {
+            active_sub
+        } else {
+            let sel = app.session.selected();
+            let sel_sub = sel.iter().find_map(|id| app.session.organizer.staged_moves.get(id)).cloned();
+            if sel_sub.is_some() {
+                sel_sub
+            } else {
+                app.session.visible_cloned().iter().find_map(|id| app.session.organizer.staged_moves.get(id)).cloned()
+            }
+        }
+    };
+
+    let target_base = app
+        .session
+        .organizer
+        .target_folder
+        .clone()
+        .or_else(|| src.as_deref().and_then(|s| matched_target_root(&app.session, Some(s))))
+        .or_else(|| app.session.organizer.mappings.first().map(|m| m.target_root.clone()));
+
+    let folder = match (target_base, staged_sub.as_deref()) {
+        (Some(base), Some(sub)) if !sub.is_empty() && sub != "." => Some(Path::new(&base).join(sub).to_string_lossy().to_string()),
+        (Some(base), _) => Some(base),
+        (None, _) => src,
+    };
+
     let url = pigallery_url_for_path(&app.session, folder.as_deref()).unwrap_or_default();
     let host = app.session.organizer.mystuff_host.clone();
-    // Try to suggest a game name from the active subfolder or target folder name
-    let guess = app
-        .session
-        .active()
-        .and_then(|id| app.session.organizer.staged_moves.get(&id))
-        .cloned()
-        .or_else(|| folder.as_deref().map(short_folder_name))
-        .unwrap_or_default();
+
+    // Try to guess a game name for initial selection from the staged subfolder or folder name
+    let guess = staged_sub.as_deref().map(short_folder_name).or_else(|| folder.as_deref().map(short_folder_name)).unwrap_or_default();
+
     let mut dlg = Dialog::MyStuffPigallery {
         host,
         pigallery_url: url,
         games: Vec::new(),
         selected_game: 0,
-        game_filter: guess,
+        game_filter: String::new(),
         media: Vec::new(),
         error: None,
         loaded_host: None,
     };
-    reload_mystuff_host(app, &mut dlg);
+    reload_mystuff_host(app, &mut dlg, Some(&guess));
     app.ui.dialog = Some(dlg);
 }
 
-fn reload_mystuff_host(app: &mut LightcraftApp, dlg: &mut Dialog) {
+fn reload_mystuff_host(app: &mut LightcraftApp, dlg: &mut Dialog, guess: Option<&str>) {
     let Dialog::MyStuffPigallery { host, pigallery_url, games, selected_game, game_filter, media, error, loaded_host } = dlg else {
         return;
     };
@@ -106,8 +133,9 @@ fn reload_mystuff_host(app: &mut LightcraftApp, dlg: &mut Dialog) {
             let parsed: Vec<MyStuffGameEntry> = res.get("games").cloned().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
             *games = parsed;
             *error = None;
-            // Pick best match for `game_filter` if non-empty
-            let f_lower = game_filter.trim().to_lowercase();
+            // Pick best match for `game_filter` or `guess` if non-empty
+            let filter = if !game_filter.trim().is_empty() { game_filter.as_str() } else { guess.unwrap_or("") };
+            let f_lower = filter.trim().to_lowercase();
             let idx = if !f_lower.is_empty() {
                 games
                     .iter()
@@ -415,10 +443,61 @@ pub fn show_quick_move_dialog(
             ui.label(egui::RichText::new("None selected").color(t.caution));
         } else {
             ui.label(egui::RichText::new(&target_folder).font(t.semibold(12.0)).color(t.text));
-            if ui.small_button("↻").on_hover_text("Rescan subfolders on disk").clicked() {
-                app.session.organizer.invalidate_folder_cache();
-            }
         }
+        let reload_btn = ui.button("↻ Reload").on_hover_text("Rescan subfolders on disk");
+        register(ui, "button:quickMoveReload", reload_btn.rect);
+        if reload_btn.clicked() {
+            app.session.organizer.invalidate_folder_cache();
+            ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
+            app.toast(ctx, "Reloaded subfolders from disk");
+        }
+
+        ui.menu_button("📁 New Subfolder…", |ui| {
+            ui.set_min_width(280.0);
+            ui.label(egui::RichText::new("Create New Subfolder").font(t.semibold(12.5)));
+            ui.label(egui::RichText::new(format!("Inside target: {target_folder}")).size(11.0).color(t.text_dim));
+            ui.add_space(4.0);
+            let sub_id = egui::Id::unique("quick-move-new-sub-input");
+            let mut new_sub = ctx.data(|d| d.get_temp::<String>(sub_id)).unwrap_or_default();
+            let edit = ui.add(egui::TextEdit::singleline(&mut new_sub).hint_text("Subfolder name (e.g. Games/PC)…").desired_width(260.0));
+            register(ui, "field:quickMoveNewSubInput", edit.rect);
+            ctx.data_mut(|d| d.insert_temp(sub_id, new_sub.clone()));
+
+            ui.add_space(4.0);
+            let clean = new_sub.trim().trim_matches('/').to_string();
+            let can_create = !clean.is_empty() && clean != "." && !target_folder.is_empty();
+
+            ui.horizontal(|ui| {
+                let create_btn = ui.add_enabled(can_create, egui::Button::new("Create on Disk"));
+                register(ui, "button:quickMoveNewSubCreate", create_btn.rect);
+                if create_btn.clicked() {
+                    match app.run("organizer.createSubfolder", json!({"subfolder": clean, "assignToSelection": false})) {
+                        Ok(_) => {
+                            app.toast(ctx, format!("Created subfolder “{clean}”"));
+                            ctx.data_mut(|d| d.remove_temp::<String>(sub_id));
+                            ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
+                            ui.close();
+                        }
+                        Err(e) => app.toast_error(ctx, e),
+                    }
+                }
+
+                let assign_btn = ui.add_enabled(can_create, egui::Button::new(egui::RichText::new("Create & Assign").color(t.accent)));
+                register(ui, "button:quickMoveNewSubAssign", assign_btn.rect);
+                if assign_btn.clicked() {
+                    match app.run("organizer.createSubfolder", json!({"subfolder": clean, "assignToSelection": true})) {
+                        Ok(_) => {
+                            app.toast(ctx, format!("Created and assigned “{clean}”"));
+                            ctx.data_mut(|d| d.remove_temp::<String>(sub_id));
+                            ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
+                            *close = true;
+                            ui.close();
+                        }
+                        Err(e) => app.toast_error(ctx, e),
+                    }
+                }
+            });
+        });
     });
     ui.label(
         egui::RichText::new(format!(
@@ -437,7 +516,7 @@ pub fn show_quick_move_dialog(
     let recent = app.session.organizer.recent_subfolders.clone();
     let all_subs = app.session.organizer.subfolders_for(&target_folder);
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (&target_folder, &q, all_subs.len(), &recent).hash(&mut hasher);
+    (&target_folder, &q, all_subs, &recent).hash(&mut hasher);
     let filter_key = hasher.finish();
     let cache_id = egui::Id::unique("quick-move-filtered-matches");
 
@@ -1109,7 +1188,7 @@ pub fn show_mystuff_pigallery_dialog(
             error: error.clone(),
             loaded_host: loaded_host.clone(),
         };
-        reload_mystuff_host(app, &mut tmp);
+        reload_mystuff_host(app, &mut tmp, None);
         if let Dialog::MyStuffPigallery { games: g2, selected_game: s2, media: m2, error: e2, loaded_host: l2, .. } = tmp {
             *games = g2;
             *selected_game = s2;

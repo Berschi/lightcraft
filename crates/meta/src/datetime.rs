@@ -127,6 +127,24 @@ impl DateTime {
         format!("{:04}:{:02}:{:02} {:02}:{:02}:{:02}", self.year, self.month, self.day, self.hour, self.minute, self.second)
     }
 
+    /// Exif `OffsetTime*` form `+HH:MM` / `-HH:MM`.
+    pub fn to_offset(&self) -> Option<String> {
+        self.offset_minutes.map(|o| {
+            let sign = if o < 0 { '-' } else { '+' };
+            format!("{sign}{:02}:{:02}", o.abs() / 60, o.abs() % 60)
+        })
+    }
+
+    /// Exif `SubSecTime*` form with 3 decimal digits when milliseconds are non-zero.
+    pub fn to_subsec(&self) -> Option<String> {
+        (self.millis > 0).then(|| format!("{:03}", self.millis))
+    }
+
+    /// Lenient date parsing: tries ISO 8601 first, then Exif format.
+    pub fn parse_lenient(s: &str) -> Option<DateTime> {
+        Self::parse_iso(s).or_else(|| Self::parse_exif(s))
+    }
+
     /// ISO 8601 with milliseconds when non-zero and the offset when known.
     pub fn to_iso(&self) -> String {
         let mut s = format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", self.year, self.month, self.day, self.hour, self.minute, self.second);

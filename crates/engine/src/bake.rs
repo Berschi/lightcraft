@@ -31,7 +31,81 @@ pub(crate) fn write_into_file(s: &mut Session, id: PhotoId, path: &Path) -> std:
     if shared > 1 {
         return Err("the file is shared by virtual copies, which can't each have their own edits in one file; it was moved without writing its metadata or edits".into());
     }
-    let ph = Arc::clone(s.catalog.photo(id).ok_or_else(|| "the photo is no longer in the catalog".to_string())?);
+    let mut ph = Arc::clone(s.catalog.photo(id).ok_or_else(|| "the photo is no longer in the catalog".to_string())?);
+
+    // Read the original file currently on disk before rendering: ensure EXIF/capture date is retained
+    let orig_bytes = std::fs::read(path).ok();
+    if let Some(ob) = &orig_bytes {
+        let orig_meta = lightcraft_meta::extract(ob);
+        let captured = if let Some(ct) = orig_meta.capture_time {
+            Some(ct.to_iso())
+        } else if let Some(cap) = &ph.captured {
+            Some(cap.clone())
+        } else {
+            let stem = path.file_stem().and_then(|st| st.to_str()).unwrap_or_default();
+            crate::cmd::organizer::detect_stem_pattern(stem).and_then(|pat| {
+                crate::cmd::organizer::match_pattern(stem, pat).map(|ts| {
+                    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}", ts.year, ts.month, ts.day, ts.hour, ts.minute, ts.second, ts.millis)
+                })
+            })
+        };
+        if let Some(iso) = captured
+            && ph.captured.as_deref() != Some(&iso)
+        {
+            let _ = s.apply_system(Op::SetCaptured { id, captured: Some(iso) });
+        }
+
+        let mut m = ph.meta.clone();
+        let mut changed_meta = false;
+        if m.camera.is_empty()
+            && let Some(cam) = orig_meta.model.or(orig_meta.make)
+        {
+            m.camera = cam;
+            changed_meta = true;
+        }
+        if m.lens.is_empty()
+            && let Some(lens) = orig_meta.lens_model
+        {
+            m.lens = lens;
+            changed_meta = true;
+        }
+        if m.focal_mm.is_none()
+            && let Some(f) = orig_meta.focal_length
+        {
+            m.focal_mm = Some(f as f32);
+            changed_meta = true;
+        }
+        if m.aperture.is_none()
+            && let Some(ap) = orig_meta.f_number
+        {
+            m.aperture = Some(ap as f32);
+            changed_meta = true;
+        }
+        if m.iso.is_none()
+            && let Some(iso) = orig_meta.iso
+        {
+            m.iso = Some(iso);
+            changed_meta = true;
+        }
+        if m.shutter.is_empty()
+            && let Some(t) = orig_meta.exposure_time
+        {
+            m.shutter = if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) };
+            changed_meta = true;
+        }
+        if m.gps.is_none()
+            && let Some(g) = orig_meta.gps
+        {
+            m.gps = Some((g.latitude, g.longitude));
+            changed_meta = true;
+        }
+        if changed_meta {
+            let _ = s.apply_system(Op::SetMeta { id, meta: Box::new(m) });
+        }
+
+        ph = Arc::clone(s.catalog.photo(id).ok_or_else(|| "the photo is no longer in the catalog".to_string())?);
+    }
+
     let neutral = ph.camera_defaults();
     let render = *ph.develop != neutral;
 

@@ -503,8 +503,17 @@ pub fn write_exif(meta: &Metadata) -> Vec<u8> {
     let mut ex = IfdBuilder::new();
     ex.set(t::EXIF_VERSION, Value::Undefined(b"0232".to_vec()));
     let r = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| Value::Rational(vec![rational(v)]));
+    let offset_val = meta.capture_time.and_then(|d| d.to_offset()).map(Value::Ascii);
+    let subsec_val = meta.capture_time.and_then(|d| d.to_subsec()).map(Value::Ascii);
     for (tag, v) in [
         (t::DATE_TIME_ORIGINAL, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
+        (t::DATE_TIME_DIGITIZED, meta.capture_time.map(|d| Value::Ascii(d.to_exif()))),
+        (t::OFFSET_TIME, offset_val.clone()),
+        (t::OFFSET_TIME_ORIGINAL, offset_val.clone()),
+        (t::OFFSET_TIME_DIGITIZED, offset_val),
+        (t::SUBSEC_TIME, subsec_val.clone()),
+        (t::SUBSEC_TIME_ORIGINAL, subsec_val.clone()),
+        (t::SUBSEC_TIME_DIGITIZED, subsec_val),
         (t::EXPOSURE_TIME, reciprocal(meta.exposure_time).or_else(|| r(meta.exposure_time))),
         (t::F_NUMBER, r(meta.f_number)),
         (t::FOCAL_LENGTH, r(meta.focal_length)),
