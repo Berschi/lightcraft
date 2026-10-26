@@ -159,7 +159,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     let exists = Path::new(&m.source).is_dir();
                     let label = format!("{name}  →  {}", short_folder_name(&m.target_root));
                     let btn = ui.add_enabled(exists, egui::Button::new(label));
-                    register(ui.ctx(), format!("organizerTodo:{}", m.source), btn.rect);
+                    register(ui, format!("organizerTodo:{}", m.source), btn.rect);
                     if btn.clicked() {
                         if let Err(e) = app.run("library.browse", json!({"path": m.source})) {
                             app.toast(ui.ctx(), e);
@@ -210,7 +210,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let lbl = if is_root { format!("📁 {root_name} (Root)") } else { format!("  ↳ {}", short_folder_name(&cand)) };
                         let sel = cand == target_folder;
                         let item = ui.selectable_label(sel, lbl);
-                        register(ui.ctx(), format!("organizerTargetOption:{cand}"), item.rect);
+                        register(ui, format!("organizerTargetOption:{cand}"), item.rect);
                         if item.clicked() {
                             let _ = app.run("organizer.setTargetFolder", json!({"path": cand}));
                             ui.close();
@@ -249,7 +249,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     .fill(if staged_count > 0 { t.accent } else { t.cell }),
                 )
                 .on_hover_text("Move all photos with an assigned subfolder into the target folder (Shortcut: Ctrl+Alt+M; Undoable with Ctrl+Z)");
-            register(ui.ctx(), "button:organizerMoveImages", move_btn.rect);
+            register(ui, "button:organizerMoveImages", move_btn.rect);
             if move_btn.clicked() {
                 match app.run("organizer.moveImages", json!({})) {
                     Ok(r) => {
@@ -269,7 +269,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // Show subfolders on images checkbox
             let mut show_sub = app.session.organizer.show_subfolders_on_images;
             let chk = ui.checkbox(&mut show_sub, "Show subfolders");
-            register(ui.ctx(), "check:organizerShowSubfolders", chk.rect);
+            register(ui, "check:organizerShowSubfolders", chk.rect);
             if chk.changed() {
                 let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
             }
@@ -360,9 +360,9 @@ pub fn cell_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
     p.rect_filled(br, 6.0, t.accent.gamma_multiply(0.92));
     p.rect_stroke(br, 6.0, Stroke::new(1.0, Color32::from_white_alpha(90)), StrokeKind::Inside);
     p.galley(pos2(br.left() + 7.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    register(ui.ctx(), format!("badge:subfolder:{}", id.0), br);
+    register(ui, format!("badge:subfolder:{}", id.0), br);
     let resp = ui
-        .interact(br, egui::Id::new(("subfolder-badge", id.0)), Sense::click())
+        .interact(br, egui::Id::unique(("subfolder-badge", id.0)), Sense::click())
         .on_hover_text(format!("Staged destination subfolder: {sub}\nClick or press M to change"));
     if resp.clicked() {
         if !app.session.selection.contains(id) {
@@ -385,8 +385,8 @@ pub fn loupe_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Pho
     let br = Rect::from_min_size(pos2(canvas.right() - g.size().x - 32.0, canvas.top() + 14.0), vec2(g.size().x + 20.0, 26.0));
     p.rect_filled(br, 6.0, t.accent.gamma_multiply(0.92));
     p.galley(pos2(br.left() + 10.0, br.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    register(ui.ctx(), "loupe:subfolderBadge", br);
-    let resp = ui.interact(br, egui::Id::new("loupe-subfolder-badge"), Sense::click());
+    register(ui, "loupe:subfolderBadge", br);
+    let resp = ui.interact(br, egui::Id::unique("loupe-subfolder-badge"), Sense::click());
     if resp.clicked() {
         open_quick_move(app);
     }
@@ -439,7 +439,7 @@ pub fn show_quick_move_dialog(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (&target_folder, &q, all_subs.len(), &recent).hash(&mut hasher);
     let filter_key = hasher.finish();
-    let cache_id = egui::Id::new("quick-move-filtered-matches");
+    let cache_id = egui::Id::unique("quick-move-filtered-matches");
 
     let matches: Vec<String> = match ctx.data(|d| d.get_temp::<(u64, Vec<String>)>(cache_id)) {
         Some((k, cached)) if k == filter_key => cached,
@@ -511,7 +511,7 @@ pub fn show_quick_move_dialog(
     let edit_resp = ui.add(
         egui::TextEdit::singleline(subfolder).hint_text("Type subfolder (e.g. _Lea/alleine or _Flauschis/Chillen, . for root)…").desired_width(480.0),
     );
-    register(ctx, "field:quickMoveSubfolder", edit_resp.rect);
+    register(ui, "field:quickMoveSubfolder", edit_resp.rect);
     if *fresh || trigger_tab_complete {
         edit_resp.request_focus();
         *fresh = false;
@@ -535,7 +535,7 @@ pub fn show_quick_move_dialog(
                 let is_cur = idx == *cursor;
                 let display = if item == "." { "📁 . (Target Folder Root)".to_string() } else { format!("📁 {item}") };
                 let resp = ui.selectable_label(is_cur, display);
-                register(ctx, format!("quickMoveOption:{item}"), resp.rect);
+                register(ui, format!("quickMoveOption:{item}"), resp.rect);
                 if is_cur && scroll_to_cursor {
                     resp.scroll_to_me(Some(egui::Align::Center));
                 }
@@ -561,18 +561,18 @@ pub fn show_quick_move_dialog(
         }
         if !typed_clean.is_empty() && typed_clean != "." && !exact_exists {
             let create_btn = ui.button(format!("+ Create & Assign “{typed_clean}”"));
-            register(ctx, "button:quickMoveCreate", create_btn.rect);
+            register(ui, "button:quickMoveCreate", create_btn.rect);
             if create_btn.clicked() {
                 trigger_create = true;
             }
         }
         let assign_btn = ui.button(egui::RichText::new("Assign (Enter)").color(t.accent));
-        register(ctx, "button:quickMoveAssign", assign_btn.rect);
+        register(ui, "button:quickMoveAssign", assign_btn.rect);
         if assign_btn.clicked() {
             trigger_assign = true;
         }
         let move_now_btn = ui.button("Assign & Move Now (Ctrl+Enter)");
-        register(ctx, "button:quickMoveNow", move_now_btn.rect);
+        register(ui, "button:quickMoveNow", move_now_btn.rect);
         if move_now_btn.clicked() {
             trigger_move_now = true;
         }
@@ -707,7 +707,7 @@ pub fn show_quick_tags_dialog(
     let prev = text.clone();
     let resp = ui
         .add(egui::TextEdit::singleline(text).hint_text("Type tag(s), e.g. Portrait, Vacation (Tab completes, Enter applies)…").desired_width(440.0));
-    register(ctx, "field:quickTagsInput", resp.rect);
+    register(ui, "field:quickTagsInput", resp.rect);
     if *fresh {
         resp.request_focus();
         *fresh = false;
@@ -733,7 +733,7 @@ pub fn show_quick_tags_dialog(
             for (idx, kw) in suggestions.iter().take(40).enumerate() {
                 let is_cur = idx == *cursor;
                 let r = ui.selectable_label(is_cur, format!("🏷 {kw}"));
-                register(ctx, format!("quickTagOption:{kw}"), r.rect);
+                register(ui, format!("quickTagOption:{kw}"), r.rect);
                 if r.clicked() {
                     let _ = app.run("photo.setMeta", json!({"addKeywords": [kw]}));
                     resp.request_focus();
@@ -748,7 +748,7 @@ pub fn show_quick_tags_dialog(
             *close = true;
         }
         let add_btn = ui.button(egui::RichText::new("Add Tag(s) (Enter)").color(t.accent));
-        register(ctx, "button:quickTagsAdd", add_btn.rect);
+        register(ui, "button:quickTagsAdd", add_btn.rect);
         if add_btn.clicked() {
             trigger_add_text = true;
         }
@@ -811,7 +811,7 @@ pub fn show_crop_preview_dialog(
         ] {
             let sel = aspect == key;
             let b = ui.selectable_label(sel, lbl);
-            register(ctx, format!("cropPreviewAspect:{key}"), b.rect);
+            register(ui, format!("cropPreviewAspect:{key}"), b.rect);
             if b.clicked() {
                 *aspect = key.to_string();
             }
@@ -894,7 +894,7 @@ pub fn show_crop_preview_dialog(
         }
         let apply_label = format!("Apply {} Crop to {} Selected Photo{}", aspect.replace('x', ":"), ids.len(), if ids.len() == 1 { "" } else { "s" });
         let apply_btn = ui.button(egui::RichText::new(apply_label).color(t.accent));
-        register(ctx, "button:cropPreviewApply", apply_btn.rect);
+        register(ui, "button:cropPreviewApply", apply_btn.rect);
         if apply_btn.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
             match app.run("crop.aspect", json!({"aspect": aspect.clone(), "selection": true})) {
                 Ok(_) => {
@@ -955,7 +955,7 @@ pub fn show_convert_screenshots_dialog(
     (from_pattern.as_str(), to_pattern.as_str(), *all_visible, app.session.catalog.revision, &app.session.selection.ids, app.session.active())
         .hash(&mut h);
     let preview_key = h.finish();
-    let preview_cache_id = egui::Id::new("screenshot-convert-preview-cache");
+    let preview_cache_id = egui::Id::unique("screenshot-convert-preview-cache");
     let (det, preview_res) = match ctx.data(|d| d.get_temp::<(u64, Value, Value)>(preview_cache_id)) {
         Some((k, det, prev)) if k == preview_key => (det, prev),
         _ => {
@@ -1035,7 +1035,7 @@ pub fn show_convert_screenshots_dialog(
             count > 0 && from_pattern != to_pattern,
             egui::Button::new(egui::RichText::new(format!("Convert {count} Name{}", if count == 1 { "" } else { "s" })).color(t.accent)),
         );
-        register(ctx, "button:convertScreenshotsConfirm", btn.rect);
+        register(ui, "button:convertScreenshotsConfirm", btn.rect);
         if btn.clicked() {
             match app.run(
                 "organizer.convertScreenshots",
@@ -1195,7 +1195,7 @@ pub fn show_mystuff_pigallery_dialog(
         }
         let can_save = games.get(*selected_game).is_some();
         let save_btn = ui.add_enabled(can_save, egui::Button::new(egui::RichText::new("Save to MyStuff").color(t.accent)));
-        register(ctx, "button:mystuffSave", save_btn.rect);
+        register(ui, "button:mystuffSave", save_btn.rect);
         if save_btn.clicked()
             && let Some(game) = games.get(*selected_game).cloned()
         {
@@ -1348,7 +1348,7 @@ mod tests {
             let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
             view.run(raw, |ui| {
                 super::bar(&mut app, ui);
-                crate::panels::dialogs::show(&mut app, ui.ctx());
+                crate::panels::dialogs::show(&mut app, ui.ctx(), false);
             });
             app.ui.dialog = None;
         }
