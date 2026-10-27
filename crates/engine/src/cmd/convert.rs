@@ -248,8 +248,10 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
     }
-    if ph.captured.is_none() && info.captured.is_some() {
-        ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
+    if let Some(cap) = &info.captured
+        && ph.captured.as_deref() != Some(cap)
+    {
+        ops.push(Op::SetCaptured { id, captured: Some(cap.clone()) });
     }
     ops
 }
@@ -428,6 +430,19 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    /// Reload from Disk updates capture time when the file carries a metadata capture time that
+    /// differs from the catalog record (e.g. metadata tags were added or edited externally after
+    /// an initial fallback to file modification time).
+    #[test]
+    fn reload_updates_stale_capture_time_from_probe() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        ph.captured = Some("2026-10-21T01:00:06".into());
+        let info = crate::media::ProbeInfo { captured: Some("2026-10-20T17:05:32+02:00".into()), ..Default::default() };
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) });
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,

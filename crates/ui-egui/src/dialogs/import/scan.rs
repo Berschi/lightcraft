@@ -186,6 +186,25 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let listed: Vec<String> = out.candidates.iter().map(|c| c.path.clone()).collect();
             app.session.forget_gone_from(&b.path, b.subfolders, &listed);
         }
+        // Reload local photos in this folder whose file on disk has changed size:
+        let stale: Vec<lightcraft_catalog::PhotoId> = out
+            .candidates
+            .iter()
+            .filter(|c| c.duplicate == Some("path".into()))
+            .filter_map(|c| {
+                let existing_id = c.existing?;
+                let ph = app.session.catalog.photo(lightcraft_catalog::PhotoId(existing_id))?;
+                if !ph.local || ph.deleted {
+                    return None;
+                }
+                let meta = std::fs::metadata(&c.path).ok()?;
+                if meta.len() != ph.file_size { Some(ph.id) } else { None }
+            })
+            .collect();
+        if !stale.is_empty() {
+            let ids: Vec<serde_json::Value> = stale.iter().map(|id| serde_json::json!(id.0)).collect();
+            let _ = app.session.execute("photo.reload", &serde_json::json!({"ids": ids}));
+        }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =
             out.candidates.iter().filter(|c| c.duplicate != Some("path".into()) && c.error.is_none()).map(|c| c.path.clone()).collect();
