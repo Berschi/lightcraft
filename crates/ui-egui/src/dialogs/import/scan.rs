@@ -197,13 +197,12 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
                 if !ph.local || ph.deleted {
                     return None;
                 }
-                let meta = std::fs::metadata(&c.path).ok()?;
-                if meta.len() != ph.file_size { Some(ph.id) } else { None }
+                (c.file_size != ph.file_size).then_some(ph.id)
             })
             .collect();
         if !stale.is_empty() {
             let ids: Vec<serde_json::Value> = stale.iter().map(|id| serde_json::json!(id.0)).collect();
-            let _ = app.session.execute("photo.reload", &serde_json::json!({"ids": ids}));
+            let _ = app.run("photo.reload", serde_json::json!({"ids": ids}));
         }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =

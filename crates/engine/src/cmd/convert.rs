@@ -248,12 +248,17 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
     }
-    if let Some(cap) = &info.captured
-        && ph.captured.as_deref() != Some(cap)
-    {
-        ops.push(Op::SetCaptured { id, captured: Some(cap.clone()) });
+    if let Some(op) = captured_op(id, ph, info) {
+        ops.push(op);
     }
     ops
+}
+
+/// The op that gives a photo the capture time its file reads now (`info`, a fresh probe), or none when
+/// the catalog already has it or the file reads none.
+pub(crate) fn captured_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
+    let cap = info.captured.as_deref()?;
+    (ph.captured.as_deref() != Some(cap)).then(|| Op::SetCaptured { id, captured: Some(cap.to_string()) })
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -305,8 +310,12 @@ pub(crate) fn reload_ops(
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(captured_op(c.id, c, info))
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -443,6 +452,36 @@ mod tests {
         let ops = fill_missing_meta(PhotoId(1), &ph, &info);
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) });
+    }
+
+    #[test]
+    fn reload_ops_updates_virtual_copies_capture_time() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut master = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        master.captured = Some("2026-10-21T01:00:06".into());
+        cat.apply(Op::AddPhoto { photo: Box::new(master.clone()) }).unwrap();
+
+        let mut copy = master.clone();
+        copy.id = PhotoId(2);
+        copy.copy_of = Some(PhotoId(1));
+        cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+
+        let info = crate::media::ProbeInfo {
+            captured: Some("2026-10-20T17:05:32+02:00".into()),
+            width: 1920,
+            height: 1080,
+            file_size: master.file_size,
+            format: "JPEG".into(),
+            ..Default::default()
+        };
+
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
+
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
+        assert_eq!(changed, vec![PhotoId(1), PhotoId(2)]);
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
