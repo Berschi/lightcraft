@@ -256,16 +256,14 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 
 /// The op that gives a photo the capture time its file reads now (`info`, a fresh probe), or none when
 /// the catalog already has it, the file reads none, or the photo's capture time was intentionally edited.
-/// An unedited photo that fell back to the file's modification time or import time gains the real capture
-/// time; a manually edited capture time (`photo.setCaptureTime`) is preserved.
+/// File-derived values (embedded EXIF or import fallback) are refreshed when the file changes on disk;
+/// manual edits made via `photo.setCaptureTime` are preserved.
 pub(crate) fn captured_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
     let cap = info.captured.as_deref()?;
-    if ph.captured.as_deref() == Some(cap) {
+    if ph.captured.as_deref() == Some(cap) || ph.captured_manual {
         return None;
     }
-    let is_fallback =
-        ph.captured.is_none() || ph.captured.as_deref() == info.file_modified.as_deref() || ph.captured.as_deref() == Some(ph.imported.as_str());
-    if is_fallback { Some(Op::SetCaptured { id, captured: Some(cap.to_string()) }) } else { None }
+    Some(Op::SetCaptured { id, captured: Some(cap.to_string()), manual: false })
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -458,7 +456,26 @@ mod tests {
         let info = crate::media::ProbeInfo { captured: Some("2026-10-20T17:05:32+02:00".into()), ..Default::default() };
         let ops = fill_missing_meta(PhotoId(1), &ph, &info);
         assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) });
+        assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()), manual: false });
+    }
+
+    /// A photo imported with an embedded capture time updates when the file's embedded capture time
+    /// is changed externally (e.g. by ExifTool or an external editor), emitting Op::SetCaptured.
+    #[test]
+    fn reload_updates_externally_edited_embedded_capture_time() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        // Imported with an embedded EXIF capture time (not manual)
+        ph.captured = Some("2020-01-01T10:00:00".into());
+        ph.captured_manual = false;
+        // File on disk now carries an updated embedded capture time
+        let info = crate::media::ProbeInfo {
+            captured: Some("2020-01-01T11:00:00".into()),
+            file_modified: Some("2026-10-27T08:00:00".into()),
+            ..Default::default()
+        };
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2020-01-01T11:00:00".into()), manual: false });
     }
 
     #[test]
@@ -486,8 +503,8 @@ mod tests {
         let mut changed = Vec::new();
         reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
 
-        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
-        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()), manual: false }));
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2026-10-20T17:05:32+02:00".into()), manual: false }));
         assert_eq!(changed, vec![PhotoId(1), PhotoId(2)]);
     }
 
@@ -497,6 +514,7 @@ mod tests {
     fn reload_preserves_manually_edited_capture_time() {
         let mut ph = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
         ph.captured = Some("2024-05-01T12:00:00".into()); // manually edited
+        ph.captured_manual = true;
         let info = crate::media::ProbeInfo {
             captured: Some("2020-01-01T10:00:00".into()),
             file_modified: Some("2026-10-21T01:00:06".into()),
@@ -511,12 +529,14 @@ mod tests {
         let mut cat = lightcraft_catalog::Catalog::new();
         let mut master = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
         master.captured = Some("2026-10-21T01:00:06".into()); // fallback
+        master.captured_manual = false;
         cat.apply(Op::AddPhoto { photo: Box::new(master.clone()) }).unwrap();
 
         let mut copy = master.clone();
         copy.id = PhotoId(2);
         copy.copy_of = Some(PhotoId(1));
         copy.captured = Some("2024-05-01T12:00:00".into()); // intentional edit on copy
+        copy.captured_manual = true;
         cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
 
         let info = crate::media::ProbeInfo {
@@ -534,9 +554,9 @@ mod tests {
         reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
 
         // Master had fallback, so it gets updated
-        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2020-01-01T10:00:00".into()) }));
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2020-01-01T10:00:00".into()), manual: false }));
         // Copy was manually edited, so it must NOT receive Op::SetCaptured
-        assert!(!ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2020-01-01T10:00:00".into()) }));
+        assert!(!ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2020-01-01T10:00:00".into()), manual: false }));
     }
 
     #[test]
@@ -550,6 +570,7 @@ mod tests {
         // 1. Manually edit capture time via command
         s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [1], "time": "2024-05-01T12:00:00"})).unwrap();
         assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().captured.as_deref(), Some("2024-05-01T12:00:00"));
+        assert!(s.catalog.photo(PhotoId(1)).unwrap().captured_manual);
 
         // 2. Perform reload logic with probe returning a different time from file
         let info = crate::media::ProbeInfo {

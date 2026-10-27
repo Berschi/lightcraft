@@ -181,6 +181,8 @@ pub enum Op {
     SetCaptured {
         id: PhotoId,
         captured: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        manual: bool,
     },
     /// Assisted culling scores.
     SetAnalysis {
@@ -899,14 +901,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetAnalysis { id, analysis: std::mem::replace(&mut p.analysis, analysis) }
             }
-            Op::SetCaptured { id, captured } => {
+            Op::SetCaptured { id, captured, manual } => {
                 if let Some(c) = &captured
                     && stacks::iso_seconds(c).is_none()
                 {
                     return Err(CatalogError::Invalid(format!("not a date: {c}")));
                 }
                 let p = self.photo_mut(id)?;
-                Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
+                let old_captured = std::mem::replace(&mut p.captured, captured);
+                let old_manual = std::mem::replace(&mut p.captured_manual, manual);
+                Op::SetCaptured { id, captured: old_captured, manual: old_manual }
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;

@@ -428,7 +428,7 @@ fn persistent_reimport_keeps_copy_and_collection_ids_and_capture_time() {
     s.close_library().unwrap();
     s.open_library(&dir, false).unwrap();
     let id = PhotoId(first["mapping"]["1"].as_u64().unwrap());
-    s.commit("Changed time", Op::SetCaptured { id, captured: None }).unwrap();
+    s.commit("Changed time", Op::SetCaptured { id, captured: None, manual: true }).unwrap();
     let second = apply(&mut s, data, true).unwrap();
     assert_eq!(first["mapping"], second["mapping"]);
     assert_eq!(first["imported"], 2);

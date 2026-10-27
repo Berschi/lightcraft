@@ -1013,7 +1013,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetFlag { id: p.id, flag: p.flag },
                 Op::SetLabel { id: p.id, label: p.label },
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
-                Op::SetCaptured { id: p.id, captured: p.captured.clone() },
+                Op::SetCaptured { id: p.id, captured: p.captured.clone(), manual: false },
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
