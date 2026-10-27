@@ -48,7 +48,7 @@ pub(crate) fn write_into_file(s: &mut Session, id: PhotoId, path: &Path) -> std:
         if let Some(iso) = captured
             && ph.captured.as_deref() != Some(&iso)
         {
-            let _ = s.apply_system(Op::SetCaptured { id, captured: Some(iso) });
+            let _ = s.apply_system(Op::SetCaptured { id, captured: Some(iso), manual: false });
         }
 
         let mut m = ph.meta.clone();

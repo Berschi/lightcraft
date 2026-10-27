@@ -72,6 +72,11 @@ pub type Result<T> = std::result::Result<T, CatalogError>;
 /// Maximum History entries kept per photo.
 pub const HISTORY_LIMIT: usize = 200;
 
+/// Pre-v10 `SetCaptured` records lacked the `manual` field and were only emitted for manual user edits.
+const fn default_pre_v10_manual() -> bool {
+    true
+}
+
 /// Every catalog mutation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -181,6 +186,8 @@ pub enum Op {
     SetCaptured {
         id: PhotoId,
         captured: Option<String>,
+        #[serde(default = "default_pre_v10_manual")]
+        manual: bool,
     },
     /// Assisted culling scores.
     SetAnalysis {
@@ -899,14 +906,16 @@ impl Catalog {
                 let p = self.photo_mut(id)?;
                 Op::SetAnalysis { id, analysis: std::mem::replace(&mut p.analysis, analysis) }
             }
-            Op::SetCaptured { id, captured } => {
+            Op::SetCaptured { id, captured, manual } => {
                 if let Some(c) = &captured
                     && stacks::iso_seconds(c).is_none()
                 {
                     return Err(CatalogError::Invalid(format!("not a date: {c}")));
                 }
                 let p = self.photo_mut(id)?;
-                Op::SetCaptured { id, captured: std::mem::replace(&mut p.captured, captured) }
+                let old_captured = std::mem::replace(&mut p.captured, captured);
+                let old_manual = std::mem::replace(&mut p.captured_manual, manual);
+                Op::SetCaptured { id, captured: old_captured, manual: old_manual }
             }
             Op::Relink { id, file_name, source, format } => {
                 let p = self.photo_mut(id)?;
@@ -1047,6 +1056,17 @@ impl Catalog {
         let mut c: Catalog = serde_json::from_str(s).map_err(|e| CatalogError::Corrupt(e.to_string()))?;
         c.repair();
         Ok(c)
+    }
+
+    /// Catalogs created before format v10 didn't track whether capture times were file-derived
+    /// or manual user edits. Mark existing capture times as manual on upgrade so reloads preserve
+    /// their stored values.
+    pub fn mark_captured_manual_for_upgrade(&mut self) {
+        for p in self.photos.values_mut() {
+            if p.captured.is_some() {
+                Arc::make_mut(p).captured_manual = true;
+            }
+        }
     }
 
     /// Make a catalog read from a snapshot hold together where a damaged or hand-edited file left
