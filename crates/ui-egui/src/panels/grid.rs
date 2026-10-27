@@ -766,7 +766,7 @@ pub(crate) fn skips_the_real_render(embedded_is_final: bool, from_embedded: bool
 /// Rendered thumbnails replacing embedded previews: after everything on screen.
 pub const BACKGROUND_THUMB_PRIORITY: u32 = 3;
 
-fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
+pub(crate) fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool, onscreen: bool, ppp: f32) {
     let t = Tokens::get(ui.ctx());
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     let resp = ui.interact(r, egui::Id::unique(("cell", id.0)), Sense::click_and_drag());
@@ -858,11 +858,27 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
-    let badge_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - 24.0), img_rect.right_bottom());
+    let tags_layout = if app.session.organizer.show_tags_in_grid && !photo.meta.keywords.is_empty() {
+        Some(super::organizer::layout_cell_tags(ui, img_rect.width(), &photo.meta.keywords))
+    } else {
+        None
+    };
+    let tags_bar_h = tags_layout.as_ref().map_or(0.0, |l| l.total_height);
+    let tags_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - tags_bar_h), img_rect.right_bottom());
+    let badge_bar =
+        Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - tags_bar_h - 24.0), pos2(img_rect.right(), img_rect.bottom() - tags_bar_h));
     if !square && photo.label.is_some() {
         // Justified photos fill the whole cell, so the label shows as a translucent tinted footer
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
-        p.rect_filled(badge_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
+        let footer_top = if show_badges {
+            badge_bar.top()
+        } else if tags_layout.is_some() {
+            tags_bar.top()
+        } else {
+            img_rect.bottom()
+        };
+        let footer_bar = Rect::from_min_max(pos2(img_rect.left(), footer_top), img_rect.right_bottom());
+        p.rect_filled(footer_bar, 0.0, crate::theme::label_background(t.cell, photo.label, selected).gamma_multiply(0.7));
     }
     if show_badges {
         let bar = badge_bar;
@@ -885,6 +901,9 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
         }
     }
+    if let Some(layout) = &tags_layout {
+        super::organizer::paint_cell_tags(ui, tags_bar, layout, resp.hovered() || selected);
+    }
     if let Some(name) = &photo.copy_name {
         // virtual copy: a folded-corner tag at the top right
         let g = p.layout_no_wrap(name.clone(), t.semibold(10.5), Color32::WHITE);
@@ -906,7 +925,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         // a raw shown from its embedded JPEG: a small amber "Preview" pill at the image's bottom
         // left, above the badge bar (always shown: it changes what editing does)
         let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
-        let at = pos2(img_rect.left() + 6.0, img_rect.bottom() - 30.0 - 16.0);
+        let top_of_bottom_bars = if show_badges {
+            badge_bar.top()
+        } else if tags_layout.is_some() {
+            tags_bar.top()
+        } else {
+            img_rect.bottom()
+        };
+        let at = pos2(img_rect.left() + 6.0, top_of_bottom_bars - 6.0 - 16.0);
         let br = Rect::from_min_size(at, vec2(g.size().x + 24.0, 16.0));
         p.rect_filled(br, 8.0, Color32::from_black_alpha(170));
         paint(p, Rect::from_center_size(pos2(br.left() + 9.0, br.center().y), vec2(12.0, 12.0)), Icon::Info, t.caution);

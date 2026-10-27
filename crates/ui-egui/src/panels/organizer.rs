@@ -6,6 +6,7 @@
 //! - Modal dialogs: `QuickMove` (`M`), `QuickTags` (`T`), `CropPreview`, `ConvertScreenshots`, `MyStuffPigallery`.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -318,6 +319,14 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if chk.changed() {
                 let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
             }
+
+            // Show tags in grid checkbox
+            let mut show_tags = app.session.organizer.show_tags_in_grid;
+            let chk_tags = ui.checkbox(&mut show_tags, "Show tags in grid");
+            register(ui, "check:organizerShowTagsInGrid", chk_tags.rect);
+            if chk_tags.changed() {
+                let _ = app.run("organizer.setShowTagsInGrid", json!({"show": show_tags}));
+            }
         });
 
         ui.add_space(4.0);
@@ -414,6 +423,102 @@ pub fn cell_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let _ = app.run("library.select", json!({"ids": [id.0]}));
         }
         open_quick_move(app);
+    }
+}
+
+/// Layout of tags for display in the grid cell tags bar.
+#[derive(Clone, Debug)]
+pub struct CellTagsLayout {
+    pub lines: Vec<Vec<TagPillLayout>>,
+    pub total_height: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct TagPillLayout {
+    pub galley: Arc<egui::Galley>,
+    pub width: f32,
+}
+
+/// Compute the multi-line layout and total height for a photo's tags in the grid.
+pub fn layout_cell_tags(ui: &egui::Ui, width: f32, keywords: &[String]) -> CellTagsLayout {
+    if keywords.is_empty() {
+        return CellTagsLayout { lines: Vec::new(), total_height: 0.0 };
+    }
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter();
+    let pill_font = t.semibold(9.0);
+
+    let mut sorted_tags: Vec<&str> = keywords.iter().map(|s| s.as_str()).collect();
+    sorted_tags.sort_by_key(|a| a.to_lowercase());
+
+    let pad_x = 4.0;
+    let gap_x = 3.0;
+    let max_line_w = (width - 2.0 * pad_x).max(10.0);
+
+    let mut lines: Vec<Vec<TagPillLayout>> = Vec::new();
+    let mut current_line: Vec<TagPillLayout> = Vec::new();
+    let mut current_line_w = 0.0;
+
+    for tag in sorted_tags {
+        let display_name = tag.rsplit_once('|').map(|(_, leaf)| leaf).unwrap_or(tag);
+        let galley = p.layout_no_wrap(display_name.to_string(), pill_font.clone(), Color32::WHITE);
+        let pill_w = (galley.size().x + 8.0).min(max_line_w);
+
+        let needed = if current_line.is_empty() { pill_w } else { current_line_w + gap_x + pill_w };
+        if !current_line.is_empty() && needed > max_line_w {
+            lines.push(std::mem::take(&mut current_line));
+            current_line_w = pill_w;
+        } else {
+            current_line_w = needed;
+        }
+        current_line.push(TagPillLayout { galley, width: pill_w });
+    }
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    let pill_h = 16.0;
+    let gap_y = 3.0;
+    let pad_y = 3.0;
+    let num_lines = lines.len();
+    let total_height = if num_lines == 0 { 0.0 } else { pad_y * 2.0 + (num_lines as f32) * pill_h + ((num_lines - 1) as f32) * gap_y };
+
+    CellTagsLayout { lines, total_height }
+}
+
+/// Paint the tags bar listing all tags of a photo as pills across one or more rows.
+pub fn paint_cell_tags(ui: &egui::Ui, bar: Rect, layout: &CellTagsLayout, hovered_or_selected: bool) {
+    if layout.lines.is_empty() {
+        return;
+    }
+    let p = ui.painter();
+
+    // Background of the tags bar: dark translucent, seamless with badge bar
+    let bg = if hovered_or_selected { Color32::from_black_alpha(150) } else { Color32::from_black_alpha(120) };
+    p.rect_filled(bar, 0.0, bg);
+
+    let pad_x = 4.0;
+    let gap_x = 3.0;
+    let pill_h = 16.0;
+    let gap_y = 3.0;
+    let pad_y = 3.0;
+
+    let pill_bg = Color32::from_rgba_unmultiplied(42, 45, 52, 220);
+    let pill_stroke = Stroke::new(1.0, Color32::from_white_alpha(50));
+
+    for (row_idx, line) in layout.lines.iter().enumerate() {
+        let y_line_top = bar.top() + pad_y + (row_idx as f32) * (pill_h + gap_y);
+        let mut x = bar.left() + pad_x;
+
+        for pill in line {
+            let pill_rect = Rect::from_min_size(pos2(x, y_line_top), vec2(pill.width, pill_h));
+            p.rect_filled(pill_rect, 4.0, pill_bg);
+            p.rect_stroke(pill_rect, 4.0, pill_stroke, StrokeKind::Inside);
+            p.galley(pos2(pill_rect.left() + 4.0, pill_rect.center().y - pill.galley.size().y / 2.0), pill.galley.clone(), Color32::WHITE);
+
+            x += pill.width + gap_x;
+        }
     }
 }
 
@@ -1428,5 +1533,66 @@ mod tests {
         assert!(has_del_btn, "Delete Folder button should be registered in the widget map");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn organizer_show_tags_in_grid_checkbox_and_rendering() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let id = session.visible_cloned()[0];
+        // Add tags to the photo
+        session.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["action", "zelda", "rpg"]})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.ui.view = ViewMode::SquareGrid;
+        app.run("view.organizerBar", json!({"on": true})).unwrap();
+
+        // Checkbox exists in the organizer bar
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            super::bar(&mut app, ui);
+        });
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
+
+        // Toggle command
+        assert!(!app.session.organizer.show_tags_in_grid);
+        app.run("organizer.setShowTagsInGrid", json!({"show": true})).unwrap();
+        assert!(app.session.organizer.show_tags_in_grid);
+
+        // Render cell with tags bar
+        let raw2 = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw2, |ui| {
+            crate::panels::grid::cell(&mut app, ui, id, egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 200.0)), true, true, 1.0);
+        });
+    }
+
+    #[test]
+    fn organizer_tags_multiline_wrapping_and_layout() {
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            // Empty tags
+            let empty = super::layout_cell_tags(ui, 200.0, &[]);
+            assert_eq!(empty.lines.len(), 0);
+            assert_eq!(empty.total_height, 0.0);
+
+            // Tags that fit on 1 line
+            let tags_single = vec!["action".into(), "rpg".into()];
+            let l_single = super::layout_cell_tags(ui, 300.0, &tags_single);
+            assert_eq!(l_single.lines.len(), 1);
+            assert_eq!(l_single.lines[0].len(), 2);
+            assert_eq!(l_single.total_height, 22.0);
+
+            // Tags that wrap into multiple lines when width is small
+            let tags_multi = vec!["Zelda".into(), "action".into(), "Adventure".into(), "Category|Roleplay".into(), "OpenWorld".into()];
+            let l_multi = super::layout_cell_tags(ui, 120.0, &tags_multi);
+            assert!(l_multi.lines.len() >= 2, "Should wrap across multiple lines: got {:?}", l_multi.lines.len());
+            let total_items: usize = l_multi.lines.iter().map(|line| line.len()).sum();
+            assert_eq!(total_items, 5, "All 5 tags must be preserved in the layout without truncation");
+            assert!(l_multi.total_height > 22.0, "Total height must expand with additional lines");
+            let expected_h = 3.0 * 2.0 + (l_multi.lines.len() as f32) * 16.0 + ((l_multi.lines.len() - 1) as f32) * 3.0;
+            assert_eq!(l_multi.total_height, expected_h);
+        });
     }
 }

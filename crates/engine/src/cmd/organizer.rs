@@ -33,6 +33,9 @@ pub struct OrganizerState {
     pub target_folder: Option<String>,
     /// Whether staged subfolder badges are drawn on thumbnails and fullscreen view.
     pub show_subfolders_on_images: bool,
+    /// Whether all tags of each photo are rendered as pills in a bar beneath the badge bar in the grid.
+    #[serde(default)]
+    pub show_tags_in_grid: bool,
     /// Recently chosen destination subfolders (most recent first).
     pub recent_subfolders: Vec<String>,
     /// Base URL for PiGallery2 (e.g. `https://shirogane.fritz.box/pigallery2`).
@@ -91,6 +94,7 @@ impl Default for OrganizerState {
             mappings: default_mappings(),
             target_folder: None,
             show_subfolders_on_images: true,
+            show_tags_in_grid: false,
             recent_subfolders: Vec::new(),
             pigallery_base_url: "https://shirogane.fritz.box/pigallery2".into(),
             mystuff_host: "shirogane".into(),
@@ -464,6 +468,7 @@ fn state_json(s: &mut Session) -> Value {
         "stagedMoves": staged,
         "stagedCount": staged.len(),
         "showSubfoldersOnImages": s.organizer.show_subfolders_on_images,
+        "showTagsInGrid": s.organizer.show_tags_in_grid,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
         "mystuffHost": s.organizer.mystuff_host,
@@ -1537,6 +1542,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "organizer.setShowTagsInGrid",
+            "Show Tags in Grid",
+            [],
+            None,
+            "{show?: bool (default: toggle)} — show or hide the tags bar beneath the badge bar on thumbnails in the grid",
+            always,
+            |s, p| {
+                let show = bool_or(p, "show", !s.organizer.show_tags_in_grid);
+                s.organizer.show_tags_in_grid = show;
+                let _ = s.save_prefs();
+                Ok(json!({"showTagsInGrid": show}))
+            }
+        ),
+        cmd!(
             "organizer.setMapping",
             "Configure Source → Target Root Mapping",
             [],
@@ -1786,5 +1805,18 @@ mod tests {
         assert_eq!(current_source_folder(&s).as_deref(), Some(parent.to_string_lossy().as_ref()));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn organizer_set_show_tags_in_grid_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.show_tags_in_grid);
+        let res = s.execute("organizer.setShowTagsInGrid", &json!({"show": true})).unwrap();
+        assert_eq!(res["showTagsInGrid"], true);
+        assert!(s.organizer.show_tags_in_grid);
+
+        let res2 = s.execute("organizer.setShowTagsInGrid", &json!({})).unwrap();
+        assert_eq!(res2["showTagsInGrid"], false);
+        assert!(!s.organizer.show_tags_in_grid);
     }
 }
