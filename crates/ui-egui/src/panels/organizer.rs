@@ -318,6 +318,14 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if chk.changed() {
                 let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
             }
+
+            // Show tags in grid checkbox
+            let mut show_tags = app.session.organizer.show_tags_in_grid;
+            let chk_tags = ui.checkbox(&mut show_tags, "Show tags in grid");
+            register(ui, "check:organizerShowTagsInGrid", chk_tags.rect);
+            if chk_tags.changed() {
+                let _ = app.run("organizer.setShowTagsInGrid", json!({"show": show_tags}));
+            }
         });
 
         ui.add_space(4.0);
@@ -414,6 +422,73 @@ pub fn cell_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let _ = app.run("library.select", json!({"ids": [id.0]}));
         }
         open_quick_move(app);
+    }
+}
+
+/// Draw the tags bar listing all tags of a photo as pills directly beneath the badge bar.
+pub fn cell_tags_bar(ui: &egui::Ui, id: PhotoId, bar: Rect, keywords: &[String], hovered_or_selected: bool) {
+    if keywords.is_empty() {
+        return;
+    }
+    let t = Tokens::get(ui.ctx());
+    let p = ui.painter();
+
+    // Background of the tags bar: dark translucent, seamless with badge bar
+    let bg = if hovered_or_selected { Color32::from_black_alpha(150) } else { Color32::from_black_alpha(120) };
+    p.rect_filled(bar, 0.0, bg);
+
+    // Sort tags alphabetically by name (case-insensitive)
+    let mut sorted_tags: Vec<&str> = keywords.iter().map(|s| s.as_str()).collect();
+    sorted_tags.sort_by_key(|a| a.to_lowercase());
+
+    let pill_h = 16.0;
+    let y_top = bar.center().y - pill_h / 2.0;
+    let mut x = bar.left() + 4.0;
+    let max_x = bar.right() - 4.0;
+
+    let all_tags_text = sorted_tags.join(", ");
+    let pill_font = t.semibold(9.0);
+    let pill_bg = Color32::from_rgba_unmultiplied(42, 45, 52, 220);
+    let pill_stroke = Stroke::new(1.0, Color32::from_white_alpha(50));
+
+    let mut remaining = 0;
+    for (idx, tag) in sorted_tags.iter().enumerate() {
+        // Display leaf name if hierarchical (e.g. "Landscape" for "Travel|Landscape")
+        let display_name = tag.rsplit_once('|').map(|(_, leaf)| leaf).unwrap_or(tag);
+        let galley = p.layout_no_wrap(display_name.to_string(), pill_font.clone(), Color32::WHITE);
+        let pill_w = galley.size().x + 8.0;
+
+        let is_last = idx + 1 == sorted_tags.len();
+        let needed = if is_last { pill_w } else { pill_w + 24.0 };
+
+        if (x + needed > max_x && !is_last) || x + pill_w > max_x {
+            remaining = sorted_tags.len() - idx;
+            break;
+        }
+
+        let pill_rect = Rect::from_min_size(pos2(x, y_top), vec2(pill_w, pill_h));
+        p.rect_filled(pill_rect, 4.0, pill_bg);
+        p.rect_stroke(pill_rect, 4.0, pill_stroke, StrokeKind::Inside);
+        p.galley(pos2(pill_rect.left() + 4.0, pill_rect.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
+
+        let resp = ui.interact(pill_rect, egui::Id::unique(("grid-tag-pill", id.0, idx)), Sense::hover());
+        resp.on_hover_text(format!("Tag: {tag}\nAll tags: {all_tags_text}"));
+
+        x += pill_w + 3.0;
+    }
+
+    if remaining > 0 {
+        let more_text = format!("+{remaining}");
+        let more_galley = p.layout_no_wrap(more_text, pill_font, Color32::from_gray(215));
+        let more_w = (more_galley.size().x + 6.0).min(max_x - x);
+        if more_w > 10.0 {
+            let more_rect = Rect::from_min_size(pos2(x, y_top), vec2(more_w, pill_h));
+            p.rect_filled(more_rect, 4.0, Color32::from_black_alpha(180));
+            p.rect_stroke(more_rect, 4.0, pill_stroke, StrokeKind::Inside);
+            p.galley(pos2(more_rect.left() + 3.0, more_rect.center().y - more_galley.size().y / 2.0), more_galley, Color32::WHITE);
+            let resp = ui.interact(more_rect, egui::Id::unique(("grid-tag-more", id.0)), Sense::hover());
+            resp.on_hover_text(format!("{remaining} more tag(s):\n{all_tags_text}"));
+        }
     }
 }
 
@@ -1428,5 +1503,37 @@ mod tests {
         assert!(has_del_btn, "Delete Folder button should be registered in the widget map");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn organizer_show_tags_in_grid_checkbox_and_rendering() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let id = session.visible_cloned()[0];
+        // Add tags to the photo
+        session.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": ["action", "zelda", "rpg"]})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.ui.view = ViewMode::SquareGrid;
+        app.run("view.organizerBar", json!({"on": true})).unwrap();
+
+        // Checkbox exists in the organizer bar
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            super::bar(&mut app, ui);
+        });
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
+
+        // Toggle command
+        assert!(!app.session.organizer.show_tags_in_grid);
+        app.run("organizer.setShowTagsInGrid", json!({"show": true})).unwrap();
+        assert!(app.session.organizer.show_tags_in_grid);
+
+        // Render cell with tags bar
+        let raw2 = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw2, |ui| {
+            crate::panels::grid::cell(&mut app, ui, id, egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 200.0)), true, true, 1.0);
+        });
     }
 }
