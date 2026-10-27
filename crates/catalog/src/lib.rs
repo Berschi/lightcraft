@@ -1060,10 +1060,11 @@ impl Catalog {
 
     /// Catalogs created before format v10 didn't track whether capture times were file-derived
     /// or manual user edits. Mark existing capture times as manual on upgrade so reloads preserve
-    /// their stored values.
+    /// their stored values. Local browsed photos are not part of the library and keep their
+    /// file-derived provenance.
     pub fn mark_captured_manual_for_upgrade(&mut self) {
         for p in self.photos.values_mut() {
-            if p.captured.is_some() {
+            if !p.local && p.captured.is_some() {
                 Arc::make_mut(p).captured_manual = true;
             }
         }
@@ -1082,6 +1083,10 @@ impl Catalog {
             if p.id != *id {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
                 Arc::make_mut(p).id = *id;
+            }
+            if p.local && p.captured_manual {
+                changed.push(format!("local photo {} cleared spurious captured_manual", p.id.0));
+                Arc::make_mut(p).captured_manual = false;
             }
         }
         for (id, a) in self.albums.iter_mut() {

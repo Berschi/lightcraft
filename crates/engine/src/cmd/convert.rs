@@ -256,10 +256,10 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 
 /// The op that gives a photo the capture time its file reads now (`info`, a fresh probe), or none when
 /// the catalog already has it, the file reads none, or the photo's capture time was intentionally edited.
-/// File-derived values (embedded EXIF or import fallback) are refreshed when the file changes on disk;
-/// manual edits made via `photo.setCaptureTime` are preserved.
+/// File-derived values (embedded EXIF or import fallback) and local browsed photos are refreshed when the
+/// file changes on disk; manual edits made via `photo.setCaptureTime` on library photos are preserved.
 pub(crate) fn captured_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
-    if ph.captured_manual {
+    if ph.captured_manual && !ph.local {
         return None;
     }
     let cap = info.captured.clone().or_else(|| {
@@ -270,7 +270,7 @@ pub(crate) fn captured_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catal
             None
         }
     })?;
-    if ph.captured.as_deref() == Some(&cap) {
+    if ph.captured.as_deref() == Some(&cap) && !ph.captured_manual {
         return None;
     }
     Some(Op::SetCaptured { id, captured: Some(cap), manual: false })
@@ -621,6 +621,29 @@ mod tests {
         reload_ops(&s.catalog, PhotoId(1), &info, &mut ops, &mut changed);
         assert!(ops.is_empty(), "reload must not emit Op::SetCaptured for manually edited photo");
         assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().captured.as_deref(), Some("2024-05-01T12:00:00"));
+    }
+
+    #[test]
+    fn local_photo_reloads_capture_time_from_disk() {
+        let mut s = crate::Session::new();
+        let mut ph =
+            Photo::new(PhotoId(1), Source::File { path: "/photos/local.jpg".into() }, "local.jpg", "JPEG", 1920, 1080, "2026-10-27T02:00:04");
+        ph.captured = Some("2026-10-27T02:00:04".into());
+        ph.local = true;
+        ph.captured_manual = true; // e.g. spuriously set by older upgrade
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+
+        let info = crate::media::ProbeInfo {
+            captured: Some("2026-10-26T19:53:01+01:00".into()),
+            width: 1920,
+            height: 1080,
+            format: "JPEG".into(),
+            ..Default::default()
+        };
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&s.catalog, PhotoId(1), &info, &mut ops, &mut changed);
+        assert_eq!(ops, vec![Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-26T19:53:01+01:00".into()), manual: false }]);
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
