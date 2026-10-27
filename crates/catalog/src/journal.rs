@@ -366,6 +366,11 @@ impl Journal {
                 for r in &report.repaired {
                     log::warn!("{SNAPSHOT}: {r}");
                 }
+                // Catalogs created before format v10 didn't track whether capture times were file-derived
+                // or manual user edits. Mark snapshot capture times as manual so reloads preserve them.
+                if h.version < 10 {
+                    catalog.mark_captured_manual_for_upgrade();
+                }
                 (catalog, s.seq, Some(h.version))
             }
             None => (Catalog::new(), 0, None),
@@ -458,9 +463,6 @@ impl Journal {
             j.store.write_atomic(&name, &log).map_err(io)?;
             log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", j.seq);
             report.damaged = Some(name);
-            if snapshot_version.unwrap_or(0) < 10 {
-                catalog.mark_captured_manual_for_upgrade();
-            }
             j.snapshot(&catalog)?;
         } else {
             if good_end < log.len() {
@@ -487,11 +489,6 @@ impl Journal {
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
             let from = snapshot_version.unwrap_or(0);
             report.upgraded_from = Some(from);
-            // Older formats (< v10) didn't track manual vs file-derived capture times: mark
-            // existing capture times as manual so reloads preserve their stored values.
-            if from < 10 {
-                catalog.mark_captured_manual_for_upgrade();
-            }
             match j.snapshot(&catalog) {
                 Ok(()) => {
                     log::info!("catalog: upgraded from format v{from} to v{VERSION}");

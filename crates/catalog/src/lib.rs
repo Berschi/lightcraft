@@ -72,6 +72,11 @@ pub type Result<T> = std::result::Result<T, CatalogError>;
 /// Maximum History entries kept per photo.
 pub const HISTORY_LIMIT: usize = 200;
 
+/// Pre-v10 `SetCaptured` records lacked the `manual` field and were only emitted for manual user edits.
+const fn default_pre_v10_manual() -> bool {
+    true
+}
+
 /// Every catalog mutation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -181,7 +186,7 @@ pub enum Op {
     SetCaptured {
         id: PhotoId,
         captured: Option<String>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default = "default_pre_v10_manual")]
         manual: bool,
     },
     /// Assisted culling scores.
