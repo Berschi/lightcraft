@@ -10,7 +10,7 @@ use std::path::Path;
 use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::cmd::organizer::{
-    MyStuffGameEntry, MyStuffMediaEntry, ScreenshotPattern, current_source_folder, matched_target_root, pigallery_url_for_path,
+    MyStuffGameEntry, MyStuffMediaEntry, ScreenshotPattern, current_source_folder, is_folder_empty, matched_target_root, pigallery_url_for_path,
     sync_target_folder_for_source,
 };
 use serde_json::{Value, json};
@@ -26,7 +26,7 @@ pub fn should_show_bar(app: &LightcraftApp) -> bool {
         return true;
     }
     let src = current_source_folder(&app.session);
-    matched_target_root(&app.session, src.as_deref()).is_some()
+    matched_target_root(&app.session, src.as_deref()).is_some() || src.as_deref().map(Path::new).is_some_and(is_folder_empty)
 }
 
 fn short_folder_name(path: &str) -> String {
@@ -168,6 +168,7 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let matched_root = matched_target_root(&app.session, src_folder.as_deref());
     let target_folder = app.session.organizer.target_folder.clone().unwrap_or_default();
     let staged_count = app.session.organizer.staged_moves.keys().filter(|id| app.session.catalog.photo(**id).is_some_and(|p| !p.deleted)).count();
+    let is_empty = app.session.visible().is_empty() && src_folder.as_deref().map(Path::new).is_some_and(is_folder_empty);
 
     egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.divider)).inner_margin(egui::Margin::symmetric(14, 6)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -292,6 +293,22 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 && text_button(ui, "organizerClearStaged", "Clear", false).on_hover_text("Clear staged subfolder assignments").clicked()
             {
                 let _ = app.run("organizer.clearStaged", json!({}));
+            }
+
+            if is_empty && let Some(src_path) = &src_folder {
+                let del_btn = ui
+                    .add(egui::Button::new(egui::RichText::new("Delete Folder").font(t.semibold(12.0)).color(Color32::WHITE)).fill(t.reject))
+                    .on_hover_text(format!("Delete empty folder '{}' from disk", short_folder_name(src_path)));
+                register(ui, "button:organizerDeleteFolder", del_btn.rect);
+                if del_btn.clicked() {
+                    let folder_name = short_folder_name(src_path);
+                    match app.run("organizer.deleteFolder", json!({"path": src_path})) {
+                        Ok(_) => {
+                            app.toast(ui.ctx(), format!("Deleted empty folder '{folder_name}'"));
+                        }
+                        Err(e) => app.toast_error(ui.ctx(), e),
+                    }
+                }
             }
 
             // Show subfolders on images checkbox
@@ -1431,5 +1448,32 @@ mod tests {
             });
             app.ui.dialog = None;
         }
+    }
+
+    #[test]
+    fn empty_folder_shows_delete_folder_button_in_bar() {
+        let tmp = std::env::temp_dir().join(format!("lc-ui-del-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let empty_dir = tmp.join("empty_todo");
+        std::fs::create_dir_all(&empty_dir).unwrap();
+
+        let mut session = lightcraft_engine::Session::new().with_fs();
+        session.execute("library.browse", &json!({"path": empty_dir.to_string_lossy()})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.ui.view = ViewMode::PhotoGrid;
+        assert!(super::should_show_bar(&app));
+
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            super::bar(&mut app, ui);
+        });
+
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        let has_del_btn = widgets.iter().any(|(w, _)| w == "button:organizerDeleteFolder");
+        assert!(has_del_btn, "Delete Folder button should be registered in the widget map");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

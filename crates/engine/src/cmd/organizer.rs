@@ -333,6 +333,39 @@ pub fn validate_subfolder(sub: &str) -> std::result::Result<String, String> {
     Ok(trimmed)
 }
 
+/// Check if a folder exists on disk and is completely empty (ignoring system metadata like `.DS_Store`, `Thumbs.db`, `.directory`).
+pub fn is_folder_empty(path: &Path) -> bool {
+    if !path.is_dir() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return false };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".DS_Store" || name_str == "Thumbs.db" || name_str == ".directory" {
+            continue;
+        }
+        return false;
+    }
+    true
+}
+
+/// Check if a folder path is safe to delete (not root `/`, drive root, or user's `$HOME`).
+pub fn is_safe_to_delete_folder(path: &Path) -> bool {
+    let Ok(abs) = std::path::absolute(path) else { return false };
+    let Some(parent) = abs.parent() else { return false };
+    if parent == Path::new("") || parent == Path::new("/") {
+        return false;
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+        && abs == Path::new(&home)
+    {
+        return false;
+    }
+    true
+}
+
 /// URL-encode a path segment or relative path for PiGallery2 (encoding everything except unreserved RFC 3986 chars).
 fn url_encode_all(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -1404,6 +1437,63 @@ pub fn specs() -> Vec<CommandSpec> {
             )
         },
         cmd!(
+            "organizer.deleteFolder",
+            "Delete Empty Folder",
+            [],
+            None,
+            "{path?: string} — deletes the empty folder on disk (defaults to current source folder) and browses its parent",
+            always,
+            |s, p| {
+                const C: &str = "organizer.deleteFolder";
+                let raw_path = str_param(p, "path").map(trim_slashes);
+                let path = match raw_path {
+                    Some(p) => p,
+                    None => current_source_folder(s).ok_or_else(|| bad(C, "no source folder to delete"))?,
+                };
+                let dir = Path::new(&path);
+                if !dir.exists() {
+                    return Err(bad(C, format!("{path}: folder does not exist")));
+                }
+                if !dir.is_dir() {
+                    return Err(bad(C, format!("{path}: not a directory")));
+                }
+                if !is_safe_to_delete_folder(dir) {
+                    return Err(bad(C, format!("{path}: cannot delete root or home directory")));
+                }
+                if !is_folder_empty(dir) {
+                    return Err(bad(C, format!("{path}: folder is not empty")));
+                }
+
+                std::fs::remove_dir_all(dir).map_err(|e| EngineError::Other(format!("delete {path}: {e}")))?;
+                s.organizer.invalidate_folder_cache();
+
+                let mut next_folder = None;
+                if s.browse.as_ref().is_some_and(|b| trim_slashes(&b.path) == path) {
+                    if let Some(parent) = dir.parent().filter(|p| p.is_dir()) {
+                        let parent_str = parent.to_string_lossy().to_string();
+                        let _ = s.execute("library.browse", &json!({"path": parent_str}));
+                        next_folder = Some(parent_str);
+                    } else if let Some(src) = s.organizer.mappings.first().filter(|m| Path::new(&m.source).is_dir()).map(|m| m.source.clone()) {
+                        let _ = s.execute("library.browse", &json!({"path": src}));
+                        next_folder = Some(src);
+                    } else {
+                        s.browse = None;
+                        s.source = LibrarySource::All;
+                        s.keep_active_in_view();
+                    }
+                } else if s.library_folder.as_ref().is_some_and(|f| trim_slashes(f) == path) {
+                    s.library_folder = None;
+                    s.source = LibrarySource::All;
+                    s.keep_active_in_view();
+                }
+
+                Ok(json!({
+                    "deleted": path,
+                    "nextFolder": next_folder,
+                }))
+            }
+        ),
+        cmd!(
             "organizer.clearStaged",
             "Clear Staged Subfolder Moves",
             [],
@@ -1646,6 +1736,43 @@ mod tests {
         assert_eq!(conv["count"], 2);
         assert!(todo_dir.join("20260315194208_1.jpg").exists());
         assert!(todo_dir.join("20260315194209_1.jpg").exists());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn delete_empty_folder_removes_folder_and_navigates_to_parent_and_rejects_non_empty() {
+        let tmp = std::env::temp_dir().join(format!("lc-del-folder-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let parent = tmp.join("parent");
+        let empty_sub = parent.join("empty_sub");
+        let non_empty_sub = parent.join("non_empty_sub");
+        std::fs::create_dir_all(&empty_sub).unwrap();
+        std::fs::create_dir_all(&non_empty_sub).unwrap();
+        std::fs::write(non_empty_sub.join("photo.jpg"), b"fake").unwrap();
+
+        assert!(is_folder_empty(&empty_sub));
+        assert!(!is_folder_empty(&non_empty_sub));
+
+        // Folder with .DS_Store is still considered empty
+        std::fs::write(empty_sub.join(".DS_Store"), b"junk").unwrap();
+        assert!(is_folder_empty(&empty_sub));
+
+        let mut s = Session::new().with_fs();
+        s.execute("library.browse", &json!({"path": empty_sub.to_string_lossy()})).unwrap();
+        assert_eq!(current_source_folder(&s).as_deref(), Some(empty_sub.to_string_lossy().as_ref()));
+
+        // Trying to delete non-empty folder returns error
+        let err = s.execute("organizer.deleteFolder", &json!({"path": non_empty_sub.to_string_lossy()}));
+        assert!(err.is_err());
+        assert!(non_empty_sub.exists());
+
+        // Deleting empty folder succeeds and browses parent
+        let res = s.execute("organizer.deleteFolder", &json!({})).unwrap();
+        assert_eq!(res["deleted"], empty_sub.to_string_lossy().as_ref());
+        assert_eq!(res["nextFolder"], parent.to_string_lossy().as_ref());
+        assert!(!empty_sub.exists());
+        assert_eq!(current_source_folder(&s).as_deref(), Some(parent.to_string_lossy().as_ref()));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
