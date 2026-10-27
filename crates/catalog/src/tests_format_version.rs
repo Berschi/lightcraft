@@ -110,21 +110,49 @@ fn v9_library_marks_capture_times_manual_on_upgrade() {
     let p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
     c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
 
+    let id3 = c.alloc_photo_id();
+    let mut p3 = Photo::new(id3, Source::File { path: "/p/3.jpg".into() }, "3.jpg", "JPEG", 100, 100, "2026-01-01");
+    p3.captured = Some("2026-01-01T12:00:00".into());
+    p3.local = true;
+    p3.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p3) }).unwrap();
+
     let snap = c.to_snapshot();
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":3,\"catalog\":{snap}}}\n").into_bytes());
 
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(r.upgraded_from, Some(9));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert!(loaded.photo(id1).unwrap().captured_manual);
     assert!(!loaded.photo(id2).unwrap().captured_manual);
+    assert!(!loaded.photo(id3).unwrap().captured_manual, "local browsed photo must not be marked manual on upgrade");
 
     // Reopening the upgraded v10 catalog leaves values unchanged
     let (_, reopened, r2) = Journal::open(Box::new(m)).unwrap();
     assert_eq!(r2.upgraded_from, None);
     assert!(reopened.photo(id1).unwrap().captured_manual);
     assert!(!reopened.photo(id2).unwrap().captured_manual);
+    assert!(!reopened.photo(id3).unwrap().captured_manual);
+}
+
+#[test]
+fn v10_catalog_repair_clears_spurious_captured_manual_on_local_photos() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let mut p = Photo::new(id, Source::File { path: "/p/local.jpg".into() }, "local.jpg", "JPEG", 100, 100, "2026-01-01");
+    p.captured = Some("2026-01-01T12:00:00".into());
+    p.local = true;
+    p.captured_manual = true;
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(!loaded.photo(id).unwrap().captured_manual);
+    assert!(r.repaired.iter().any(|msg| msg.contains("cleared spurious captured_manual")));
 }
 
 #[test]
