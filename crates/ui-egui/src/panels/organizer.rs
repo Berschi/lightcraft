@@ -419,7 +419,7 @@ pub fn cell_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
 
 /// Draw the staged destination subfolder badge in the Detail / Fullscreen (`F`) view.
 pub fn loupe_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, canvas: Rect) {
-    if !app.session.organizer.show_subfolders_on_images {
+    if !app.session.organizer.show_subfolders_on_images || app.ui.fullscreen {
         return;
     }
     let Some(sub) = app.session.organizer.staged_moves.get(&id).cloned() else { return };
@@ -468,53 +468,6 @@ pub fn show_quick_move_dialog(
             ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
             app.toast(ctx, "Reloaded subfolders from disk");
         }
-
-        ui.menu_button("📁 New Subfolder…", |ui| {
-            ui.set_min_width(280.0);
-            ui.label(egui::RichText::new("Create New Subfolder").font(t.semibold(12.5)));
-            ui.label(egui::RichText::new(format!("Inside target: {target_folder}")).size(11.0).color(t.text_dim));
-            ui.add_space(4.0);
-            let sub_id = egui::Id::unique("quick-move-new-sub-input");
-            let mut new_sub = ctx.data(|d| d.get_temp::<String>(sub_id)).unwrap_or_default();
-            let edit = ui.add(egui::TextEdit::singleline(&mut new_sub).hint_text("Subfolder name (e.g. Games/PC)…").desired_width(260.0));
-            register(ui, "field:quickMoveNewSubInput", edit.rect);
-            ctx.data_mut(|d| d.insert_temp(sub_id, new_sub.clone()));
-
-            ui.add_space(4.0);
-            let clean = new_sub.trim().trim_matches('/').to_string();
-            let can_create = !clean.is_empty() && clean != "." && !target_folder.is_empty();
-
-            ui.horizontal(|ui| {
-                let create_btn = ui.add_enabled(can_create, egui::Button::new("Create on Disk"));
-                register(ui, "button:quickMoveNewSubCreate", create_btn.rect);
-                if create_btn.clicked() {
-                    match app.run("organizer.createSubfolder", json!({"subfolder": clean, "assignToSelection": false})) {
-                        Ok(_) => {
-                            app.toast(ctx, format!("Created subfolder “{clean}”"));
-                            ctx.data_mut(|d| d.remove_temp::<String>(sub_id));
-                            ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
-                            ui.close();
-                        }
-                        Err(e) => app.toast_error(ctx, e),
-                    }
-                }
-
-                let assign_btn = ui.add_enabled(can_create, egui::Button::new(egui::RichText::new("Create & Assign").color(t.accent)));
-                register(ui, "button:quickMoveNewSubAssign", assign_btn.rect);
-                if assign_btn.clicked() {
-                    match app.run("organizer.createSubfolder", json!({"subfolder": clean, "assignToSelection": true})) {
-                        Ok(_) => {
-                            app.toast(ctx, format!("Created and assigned “{clean}”"));
-                            ctx.data_mut(|d| d.remove_temp::<String>(sub_id));
-                            ctx.data_mut(|d| d.remove_temp::<(u64, Vec<String>)>(egui::Id::unique("quick-move-filtered-matches")));
-                            *close = true;
-                            ui.close();
-                        }
-                        Err(e) => app.toast_error(ctx, e),
-                    }
-                }
-            });
-        });
     });
     ui.label(
         egui::RichText::new(format!(

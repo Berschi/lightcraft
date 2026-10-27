@@ -45,6 +45,32 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     // looking at a folder never brings its deleted photos back (importing the files does)
     let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };
     let report = import_with(s, &files, &opts)?;
+    // Detect local photos in this folder that have changed on disk or have stale metadata/fallback dates:
+    let changed_ids: Vec<PhotoId> = s
+        .catalog
+        .photos()
+        .filter(|p| p.local && !p.deleted)
+        .filter_map(|p| match &p.source {
+            Source::File { path } if in_folder(path, &dir_s, subfolders) => {
+                let meta = std::fs::metadata(path).ok()?;
+                let size_changed = meta.len() != p.file_size;
+                let stem = Path::new(path).file_stem().and_then(|st| st.to_str()).unwrap_or_default();
+                let stem_ts = crate::cmd::organizer::timestamp_from_stem(stem);
+                let stem_mismatch = if let Some(ts) = &stem_ts {
+                    let day = &ts[..10.min(ts.len())];
+                    p.captured.as_deref().is_none_or(|c| !c.starts_with(day))
+                } else {
+                    false
+                };
+                if size_changed || stem_mismatch { Some(p.id) } else { None }
+            }
+            _ => None,
+        })
+        .collect();
+    if !changed_ids.is_empty() {
+        let ids: Vec<Value> = changed_ids.iter().map(|id| json!(id.0)).collect();
+        let _ = s.execute("photo.reload", &json!({"ids": ids}));
+    }
     let forgotten = forget_gone(s, &dir_s, subfolders, &files);
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });

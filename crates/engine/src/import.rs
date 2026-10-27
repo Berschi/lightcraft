@@ -764,6 +764,10 @@ pub(crate) fn scan_files(mut input: ScanInput, files: Vec<String>, progress: &Sc
                 (c.format, c.kind, c.width, c.height, c.file_size, c.captured) =
                     (info.format.clone(), info.kind, info.width, info.height, info.file_size, info.captured.clone());
                 // as the import will date it (a sidecar's date, when there is one, still wins there)
+                if c.captured.is_none() {
+                    let stem = Path::new(&f).file_stem().and_then(|st| st.to_str()).unwrap_or_default();
+                    c.captured = crate::cmd::organizer::timestamp_from_stem(stem);
+                }
                 c.captured = c.captured.or_else(|| info.file_modified.clone());
                 c.preview_only = info.preview_only.clone();
                 if let Some(h) = &info.content_hash {
@@ -1140,7 +1144,11 @@ impl ImportJob {
             if info.captured.is_none() {
                 info.captured = sidecar.as_ref().and_then(|sc| sc.captured.clone());
             }
-            // no date in the file or its sidecar: the file's own date, as Lightroom does
+            if info.captured.is_none() {
+                let stem = Path::new(&path).file_stem().and_then(|st| st.to_str()).unwrap_or_default();
+                info.captured = crate::cmd::organizer::timestamp_from_stem(stem);
+            }
+            // no date in the file or its sidecar or filename pattern: the file's own date, as Lightroom does
             if info.captured.is_none() {
                 info.captured = info.file_modified.clone();
             }

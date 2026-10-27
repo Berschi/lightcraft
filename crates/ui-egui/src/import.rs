@@ -609,6 +609,34 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
             let listed: Vec<String> = out.candidates.iter().map(|c| c.path.clone()).collect();
             app.session.forget_gone_from(&b.path, b.subfolders, &listed);
         }
+        // Reload local photos in this folder that have changed on disk or have stale metadata/fallback dates:
+        let stale: Vec<lightcraft_catalog::PhotoId> = out
+            .candidates
+            .iter()
+            .filter(|c| c.duplicate == Some("path".into()))
+            .filter_map(|c| {
+                let existing_id = c.existing?;
+                let ph = app.session.catalog.photo(lightcraft_catalog::PhotoId(existing_id))?;
+                if !ph.local || ph.deleted {
+                    return None;
+                }
+                let meta = std::fs::metadata(&c.path).ok()?;
+                let size_changed = meta.len() != ph.file_size;
+                let stem = std::path::Path::new(&c.path).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                let stem_ts = lightcraft_engine::cmd::organizer::timestamp_from_stem(stem);
+                let stem_mismatch = if let Some(ts) = &stem_ts {
+                    let day = &ts[..10.min(ts.len())];
+                    ph.captured.as_deref().is_none_or(|cap| !cap.starts_with(day))
+                } else {
+                    false
+                };
+                if size_changed || stem_mismatch { Some(ph.id) } else { None }
+            })
+            .collect();
+        if !stale.is_empty() {
+            let ids: Vec<serde_json::Value> = stale.iter().map(|id| serde_json::json!(id.0)).collect();
+            let _ = app.session.execute("photo.reload", &serde_json::json!({"ids": ids}));
+        }
         // what the library doesn't know yet joins the Local view
         let queue: Vec<String> =
             out.candidates.iter().filter(|c| c.duplicate != Some("path".into()) && c.error.is_none()).map(|c| c.path.clone()).collect();

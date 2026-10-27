@@ -966,6 +966,17 @@ pub fn detect_stem_pattern(stem: &str) -> Option<ScreenshotPattern> {
     ScreenshotPattern::ALL.iter().copied().find(|pat| match_pattern(stem, *pat).is_some())
 }
 
+/// Extract an ISO timestamp `YYYY-MM-DDTHH:MM:SS.mmm` from a filename stem if it matches
+/// a convertible screenshot pattern.
+pub fn timestamp_from_stem(stem: &str) -> Option<String> {
+    let pat = detect_stem_pattern(stem)?;
+    if !pat.is_convertible() {
+        return None;
+    }
+    let ts = match_pattern(stem, pat)?;
+    Some(format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}", ts.year, ts.month, ts.day, ts.hour, ts.minute, ts.second, ts.millis))
+}
+
 fn format_screenshot_stem(ts: ParsedTimestamp, to: ScreenshotPattern, collision_index: usize) -> String {
     let ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: s, millis: ms } = ts;
     match to {

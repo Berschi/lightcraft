@@ -43,11 +43,7 @@ pub(crate) fn write_into_file(s: &mut Session, id: PhotoId, path: &Path) -> std:
             Some(cap.clone())
         } else {
             let stem = path.file_stem().and_then(|st| st.to_str()).unwrap_or_default();
-            crate::cmd::organizer::detect_stem_pattern(stem).and_then(|pat| {
-                crate::cmd::organizer::match_pattern(stem, pat).map(|ts| {
-                    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}", ts.year, ts.month, ts.day, ts.hour, ts.minute, ts.second, ts.millis)
-                })
-            })
+            crate::cmd::organizer::timestamp_from_stem(stem)
         };
         if let Some(iso) = captured
             && ph.captured.as_deref() != Some(&iso)

@@ -248,8 +248,18 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m != before {
         ops.push(Op::SetMeta { id, meta: Box::new(m) });
     }
-    if ph.captured.is_none() && info.captured.is_some() {
-        ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
+    let target_captured = info.captured.clone().or_else(|| {
+        if let Source::File { path } = &ph.source {
+            let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            crate::cmd::organizer::timestamp_from_stem(stem)
+        } else {
+            None
+        }
+    });
+    if let Some(cap) = target_captured
+        && ph.captured.as_deref() != Some(&cap)
+    {
+        ops.push(Op::SetCaptured { id, captured: Some(cap) });
     }
     ops
 }
@@ -428,6 +438,31 @@ mod tests {
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    #[test]
+    fn reload_updates_stale_capture_time_from_probe_or_stem() {
+        // 1. Stale capture time (e.g. initial fallback) updated when probe has real EXIF capture date
+        let mut ph = Photo::new(
+            PhotoId(1),
+            Source::File { path: "/photos/2026-10-20_17.05.32.413.jpg".into() },
+            "2026-10-20_17.05.32.413.jpg",
+            "JPEG",
+            1920,
+            1080,
+            "2026-10-21T01:00:06",
+        );
+        ph.captured = Some("2026-10-21T01:00:06".into()); // Stale fallback mtime (1:00 AM)
+        let info = crate::media::ProbeInfo { captured: Some("2026-10-20T17:05:32+02:00".into()), ..Default::default() };
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) });
+
+        // 2. When probe has no EXIF date (None), fall back to filename stem pattern if convertible
+        let empty_info = crate::media::ProbeInfo::default();
+        let ops2 = fill_missing_meta(PhotoId(1), &ph, &empty_info);
+        assert_eq!(ops2.len(), 1);
+        assert_eq!(ops2[0], Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32.413".into()) });
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
