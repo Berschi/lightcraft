@@ -858,8 +858,12 @@ pub(crate) fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: R
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
-    let has_tags = app.session.organizer.show_tags_in_grid && !photo.meta.keywords.is_empty();
-    let tags_bar_h = if has_tags { 22.0 } else { 0.0 };
+    let tags_layout = if app.session.organizer.show_tags_in_grid && !photo.meta.keywords.is_empty() {
+        Some(super::organizer::layout_cell_tags(ui, img_rect.width(), &photo.meta.keywords))
+    } else {
+        None
+    };
+    let tags_bar_h = tags_layout.as_ref().map_or(0.0, |l| l.total_height);
     let tags_bar = Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - tags_bar_h), img_rect.right_bottom());
     let badge_bar =
         Rect::from_min_max(pos2(img_rect.left(), img_rect.bottom() - tags_bar_h - 24.0), pos2(img_rect.right(), img_rect.bottom() - tags_bar_h));
@@ -868,7 +872,7 @@ pub(crate) fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: R
         // over the photo's bottom edge (opaque, it would hide 24 px of every labelled photo).
         let footer_top = if show_badges {
             badge_bar.top()
-        } else if has_tags {
+        } else if tags_layout.is_some() {
             tags_bar.top()
         } else {
             img_rect.bottom()
@@ -897,8 +901,8 @@ pub(crate) fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: R
             p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
         }
     }
-    if has_tags {
-        super::organizer::cell_tags_bar(ui, id, tags_bar, &photo.meta.keywords, resp.hovered() || selected);
+    if let Some(layout) = &tags_layout {
+        super::organizer::paint_cell_tags(ui, tags_bar, layout, resp.hovered() || selected);
     }
     if let Some(name) = &photo.copy_name {
         // virtual copy: a folded-corner tag at the top right
@@ -923,7 +927,7 @@ pub(crate) fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: R
         let g = p.layout_no_wrap(crate::i18n::tr("Preview").into(), t.semibold(9.5), Color32::WHITE);
         let top_of_bottom_bars = if show_badges {
             badge_bar.top()
-        } else if has_tags {
+        } else if tags_layout.is_some() {
             tags_bar.top()
         } else {
             img_rect.bottom()
