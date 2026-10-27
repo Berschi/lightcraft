@@ -49,7 +49,7 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     let changed_ids: Vec<PhotoId> = s
         .catalog
         .photos()
-        .filter(|p| p.local && !p.deleted)
+        .filter(|p| p.local && !p.deleted && p.copy_of.is_none())
         .filter_map(|p| match &p.source {
             Source::File { path } if in_folder(path, &dir_s, subfolders) => {
                 let meta = std::fs::metadata(path).ok()?;

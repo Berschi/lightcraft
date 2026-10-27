@@ -255,10 +255,17 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 }
 
 /// The op that gives a photo the capture time its file reads now (`info`, a fresh probe), or none when
-/// the catalog already has it or the file reads none.
+/// the catalog already has it, the file reads none, or the photo's capture time was intentionally edited.
+/// An unedited photo that fell back to the file's modification time or import time gains the real capture
+/// time; a manually edited capture time (`photo.setCaptureTime`) is preserved.
 pub(crate) fn captured_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
     let cap = info.captured.as_deref()?;
-    (ph.captured.as_deref() != Some(cap)).then(|| Op::SetCaptured { id, captured: Some(cap.to_string()) })
+    if ph.captured.as_deref() == Some(cap) {
+        return None;
+    }
+    let is_fallback =
+        ph.captured.is_none() || ph.captured.as_deref() == info.file_modified.as_deref() || ph.captured.as_deref() == Some(ph.imported.as_str());
+    if is_fallback { Some(Op::SetCaptured { id, captured: Some(cap.to_string()) }) } else { None }
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -482,6 +489,82 @@ mod tests {
         assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
         assert!(ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2026-10-20T17:05:32+02:00".into()) }));
         assert_eq!(changed, vec![PhotoId(1), PhotoId(2)]);
+    }
+
+    /// A manually edited capture time (`photo.setCaptureTime`) survives reload and is not overwritten
+    /// by probe metadata, even if the probe reads a different capture time from the file.
+    #[test]
+    fn reload_preserves_manually_edited_capture_time() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        ph.captured = Some("2024-05-01T12:00:00".into()); // manually edited
+        let info = crate::media::ProbeInfo {
+            captured: Some("2020-01-01T10:00:00".into()),
+            file_modified: Some("2026-10-21T01:00:06".into()),
+            ..Default::default()
+        };
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        assert!(ops.is_empty(), "manually edited capture time must survive reload");
+    }
+
+    #[test]
+    fn reload_ops_preserves_manually_edited_capture_time_on_virtual_copy() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut master = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        master.captured = Some("2026-10-21T01:00:06".into()); // fallback
+        cat.apply(Op::AddPhoto { photo: Box::new(master.clone()) }).unwrap();
+
+        let mut copy = master.clone();
+        copy.id = PhotoId(2);
+        copy.copy_of = Some(PhotoId(1));
+        copy.captured = Some("2024-05-01T12:00:00".into()); // intentional edit on copy
+        cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+
+        let info = crate::media::ProbeInfo {
+            captured: Some("2020-01-01T10:00:00".into()),
+            file_modified: Some("2026-10-21T01:00:06".into()),
+            width: 1920,
+            height: 1080,
+            file_size: master.file_size,
+            format: "JPEG".into(),
+            ..Default::default()
+        };
+
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
+
+        // Master had fallback, so it gets updated
+        assert!(ops.contains(&Op::SetCaptured { id: PhotoId(1), captured: Some("2020-01-01T10:00:00".into()) }));
+        // Copy was manually edited, so it must NOT receive Op::SetCaptured
+        assert!(!ops.contains(&Op::SetCaptured { id: PhotoId(2), captured: Some("2020-01-01T10:00:00".into()) }));
+    }
+
+    #[test]
+    fn photo_set_capture_time_survives_reload() {
+        let mut s = crate::Session::new();
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/photos/a.jpg".into() }, "a.jpg", "JPEG", 1920, 1080, "2026-10-21T01:00:06");
+        ph.captured = Some("2026-10-21T01:00:06".into()); // initial fallback
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        s.selection = crate::Selection::single(PhotoId(1));
+
+        // 1. Manually edit capture time via command
+        s.execute("photo.setCaptureTime", &serde_json::json!({"ids": [1], "time": "2024-05-01T12:00:00"})).unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().captured.as_deref(), Some("2024-05-01T12:00:00"));
+
+        // 2. Perform reload logic with probe returning a different time from file
+        let info = crate::media::ProbeInfo {
+            captured: Some("2020-01-01T10:00:00".into()),
+            file_modified: Some("2026-10-21T01:00:06".into()),
+            width: 1920,
+            height: 1080,
+            format: "JPEG".into(),
+            ..Default::default()
+        };
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&s.catalog, PhotoId(1), &info, &mut ops, &mut changed);
+        assert!(ops.is_empty(), "reload must not emit Op::SetCaptured for manually edited photo");
+        assert_eq!(s.catalog.photo(PhotoId(1)).unwrap().captured.as_deref(), Some("2024-05-01T12:00:00"));
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
