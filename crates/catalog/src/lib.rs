@@ -1053,6 +1053,17 @@ impl Catalog {
         Ok(c)
     }
 
+    /// Catalogs created before format v10 didn't track whether capture times were file-derived
+    /// or manual user edits. Mark existing capture times as manual on upgrade so reloads preserve
+    /// their stored values.
+    pub fn mark_captured_manual_for_upgrade(&mut self) {
+        for p in self.photos.values_mut() {
+            if p.captured.is_some() {
+                Arc::make_mut(p).captured_manual = true;
+            }
+        }
+    }
+
     /// Make a catalog read from a snapshot hold together where a damaged or hand-edited file left
     /// it inconsistent, so nothing that relies on it can fail (code indexes stacks by the ids it
     /// finds in them, and walks folders up to the top): every photo, album and stack carries the

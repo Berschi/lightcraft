@@ -98,6 +98,61 @@ fn v6_preview_only_photo_loads_unstamped_and_is_upgraded() {
 }
 
 #[test]
+fn v9_library_marks_capture_times_manual_on_upgrade() {
+    let mut c = Catalog::new();
+    let id1 = c.alloc_photo_id();
+    let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    p1.captured = Some("2026-01-01T12:00:00".into());
+    p1.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p1) }).unwrap();
+
+    let id2 = c.alloc_photo_id();
+    let p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
+    c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(9));
+    assert_eq!(snapshot_version(&m), u64::from(VERSION));
+    assert!(loaded.photo(id1).unwrap().captured_manual);
+    assert!(!loaded.photo(id2).unwrap().captured_manual);
+
+    // Reopening the upgraded v10 catalog leaves values unchanged
+    let (_, reopened, r2) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r2.upgraded_from, None);
+    assert!(reopened.photo(id1).unwrap().captured_manual);
+    assert!(!reopened.photo(id2).unwrap().captured_manual);
+}
+
+#[test]
+fn v10_library_preserves_captured_manual_values() {
+    let mut c = Catalog::new();
+    let id1 = c.alloc_photo_id();
+    let mut p1 = Photo::new(id1, Source::File { path: "/p/1.jpg".into() }, "1.jpg", "JPEG", 100, 100, "2026-01-01");
+    p1.captured = Some("2026-01-01T12:00:00".into());
+    p1.captured_manual = false;
+    c.apply(Op::AddPhoto { photo: Box::new(p1) }).unwrap();
+
+    let id2 = c.alloc_photo_id();
+    let mut p2 = Photo::new(id2, Source::File { path: "/p/2.jpg".into() }, "2.jpg", "JPEG", 100, 100, "2026-01-01");
+    p2.captured = Some("2026-01-01T13:00:00".into());
+    p2.captured_manual = true;
+    c.apply(Op::AddPhoto { photo: Box::new(p2) }).unwrap();
+
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert!(!loaded.photo(id1).unwrap().captured_manual);
+    assert!(loaded.photo(id2).unwrap().captured_manual);
+}
+
+#[test]
 fn versionless_log_only_library_is_upgraded() {
     let mut c = Catalog::new();
     let op = photo(&mut c);

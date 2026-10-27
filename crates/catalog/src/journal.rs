@@ -458,6 +458,9 @@ impl Journal {
             j.store.write_atomic(&name, &log).map_err(io)?;
             log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", j.seq);
             report.damaged = Some(name);
+            if snapshot_version.unwrap_or(0) < 10 {
+                catalog.mark_captured_manual_for_upgrade();
+            }
             j.snapshot(&catalog)?;
         } else {
             if good_end < log.len() {
@@ -482,12 +485,16 @@ impl Journal {
                 log::warn!("catalog: can't write the new library's snapshot: {e}");
             }
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
-            report.upgraded_from = Some(snapshot_version.unwrap_or(0));
+            let from = snapshot_version.unwrap_or(0);
+            report.upgraded_from = Some(from);
+            // Older formats (< v10) didn't track manual vs file-derived capture times: mark
+            // existing capture times as manual so reloads preserve their stored values.
+            if from < 10 {
+                catalog.mark_captured_manual_for_upgrade();
+            }
             match j.snapshot(&catalog) {
                 Ok(()) => {
-                    if let Some(v) = report.upgraded_from {
-                        log::info!("catalog: upgraded from format v{v} to v{VERSION}");
-                    }
+                    log::info!("catalog: upgraded from format v{from} to v{VERSION}");
                 }
                 // nothing lost: the old files are intact and still load; retried on next open
                 Err(e) => log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}"),
