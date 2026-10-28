@@ -167,6 +167,7 @@ rustPlatform.buildRustPackage {
     # Desktop integration: byte-for-byte the files the .deb/.rpm/.AppImage install.
     install -Dm644 packaging/linux/${appId}.desktop $out/share/applications/${appId}.desktop
     install -Dm644 packaging/linux/${appId}.mime.xml $out/share/mime/packages/${appId}.xml
+    install -d $out/share/icons
     cp -r assets/app-icon/hicolor $out/share/icons/
     install -d $out/share/metainfo
     substitute packaging/linux/${appId}.metainfo.xml.in \
