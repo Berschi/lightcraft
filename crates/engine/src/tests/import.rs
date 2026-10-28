@@ -2359,6 +2359,83 @@ fn import_rendered_file_ignores_embedded_develop_settings() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+#[test]
+fn import_embedded_metadata_and_field_specific_sidecar_precedence() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-precedence-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // Case 1: JPEG with embedded Rating 4 and Label Blue, external sidecar with only Label Red
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" xmp:Label="Blue"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes1 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("partial.jpg"), &bytes1).unwrap();
+    let partial_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("partial.xmp"), partial_sidecar).unwrap();
+
+    // Case 2: JPEG with embedded Rating 4 and Label Blue, without sidecar
+    let px2 = [129u8; 40 * 30 * 3];
+    let bytes2 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px2)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("no_sidecar.jpg"), &bytes2).unwrap();
+
+    // Case 3: JPEG with embedded Rating 4 and Label Blue, complete sidecar override with Rating 1 and Label Red
+    let px3 = [130u8; 40 * 30 * 3];
+    let bytes3 = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px3)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("complete.jpg"), &bytes3).unwrap();
+    let complete_sidecar = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="1" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("complete.xmp"), complete_sidecar).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 3);
+
+    let partial_p = s.catalog.photos().find(|p| p.file_name == "partial.jpg").unwrap();
+    assert_eq!(partial_p.rating, 4);
+    assert_eq!(partial_p.label, Some(ColorLabel::Red));
+
+    let no_sidecar_p = s.catalog.photos().find(|p| p.file_name == "no_sidecar.jpg").unwrap();
+    assert_eq!(no_sidecar_p.rating, 4);
+    assert_eq!(no_sidecar_p.label, Some(ColorLabel::Blue));
+
+    let complete_p = s.catalog.photos().find(|p| p.file_name == "complete.jpg").unwrap();
+    assert_eq!(complete_p.rating, 1);
+    assert_eq!(complete_p.label, Some(ColorLabel::Red));
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn import_partial_sidecar_override_with_rendered_develop() {
+    use lightcraft_catalog::ColorLabel;
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let src = temp_dir("embedded-sidecar-rendered-develop-test");
+    let px = [128u8; 40 * 30 * 3];
+
+    // JPEG with embedded Rating 4, Label Blue, and crs:Exposure2012="+2.00"
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="4" xmp:Label="Blue" crs:Exposure2012="+2.00"/></rdf:RDF></x:xmpmeta>"#;
+    let meta = EncodeMeta { xmp: Some(xmp), ..Default::default() };
+    let bytes = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &meta).unwrap();
+    std::fs::write(src.join("photo.jpg"), &bytes).unwrap();
+
+    // Sidecar overriding Label to Red and explicitly setting Exposure to +1.00 (no rating tag)
+    let sidecar_xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Label="Red" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("photo.xmp"), sidecar_xmp).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.join("photo.jpg").to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1);
+    let p = s.catalog.photos().next().unwrap();
+    // Rating 4 from embedded is kept
+    assert_eq!(p.rating, 4);
+    // Label Red from sidecar overrides Blue
+    assert_eq!(p.label, Some(ColorLabel::Red));
+    // External sidecar's develop settings apply; embedded exposure +2 stays suppressed
+    assert_eq!(p.develop.light.exposure, 1.0);
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one.
 fn write_raw(path: &Path) {
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
