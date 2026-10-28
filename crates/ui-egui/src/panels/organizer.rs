@@ -312,9 +312,11 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
 
-            // Show subfolders on images checkbox
+            // Show target folder badges on images checkbox
             let mut show_sub = app.session.organizer.show_subfolders_on_images;
-            let chk = ui.checkbox(&mut show_sub, "Show subfolders");
+            let chk = ui
+                .checkbox(&mut show_sub, "Show target folder badges")
+                .on_hover_text("Show the staged destination subfolder badge (→ folder) on photos in the grid");
             register(ui, "check:organizerShowSubfolders", chk.rect);
             if chk.changed() {
                 let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
