@@ -966,11 +966,6 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             crate::panels::organizer::open_quick_tags(app);
             Ok(Value::Null)
         }
-        "dialog.cropPreview" => {
-            let aspect = p.get("aspect").and_then(Value::as_str).unwrap_or("16x9");
-            crate::panels::organizer::open_crop_preview(app, aspect);
-            Ok(Value::Null)
-        }
         "dialog.convertScreenshots" => {
             crate::panels::organizer::open_convert_screenshots(app);
             Ok(Value::Null)

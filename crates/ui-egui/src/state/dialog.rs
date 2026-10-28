@@ -353,11 +353,6 @@ pub enum Dialog {
         cursor: usize,
         fresh: bool,
     },
-    /// Media Organizer: preview 16:9 / 24:10 center crop on selected photo(s) before applying.
-    CropPreview {
-        aspect: String,
-        index: usize,
-    },
     /// Media Organizer: detect and convert screenshot filenames between formats.
     ConvertScreenshots {
         from_pattern: String,

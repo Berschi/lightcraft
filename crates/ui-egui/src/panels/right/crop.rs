@@ -106,9 +106,6 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if text_button(ui, "cropQuick24x10", "24:10", cur == "24 × 10").on_hover_text("Crop selected photo(s) to 24:10").clicked() {
                 let _ = app.run("crop.aspect", json!({"aspect": "24x10", "selection": true}));
             }
-            if text_button(ui, "cropQuickPreview", "Preview…", false).on_hover_text("Preview 16:9 / 24:10 crop on selected photo(s)").clicked() {
-                let _ = app.run("dialog.cropPreview", json!({"aspect": if cur == "24 × 10" { "24x10" } else { "16x9" }}));
-            }
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {

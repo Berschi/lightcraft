@@ -242,7 +242,6 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
                 Ok(serde_json::Value::Null)
             }
         }
-        Dialog::CropPreview { aspect, .. } => app.run("crop.aspect", json!({"aspect": aspect, "selection": true})),
         Dialog::ConvertScreenshots { from_pattern, to_pattern, all_visible, .. } => {
             app.run("organizer.convertScreenshots", json!({"fromPattern": from_pattern, "toPattern": to_pattern, "allVisible": all_visible}))
         }

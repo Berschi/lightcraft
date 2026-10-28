@@ -1380,9 +1380,6 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if ui.button("Crop to 24:10").clicked() {
             let _ = app.run("crop.aspect", json!({"aspect": "24x10", "selection": true}));
         }
-        if ui.button("Crop Preview (16:9 / 24:10)…").clicked() {
-            let _ = app.run("dialog.cropPreview", json!({"aspect": "16x9"}));
-        }
         ui.separator();
         if ui.button("Convert Screenshot Filenames…").clicked() {
             let _ = app.run("dialog.convertScreenshots", json!({}));

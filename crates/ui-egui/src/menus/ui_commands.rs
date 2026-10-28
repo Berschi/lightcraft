@@ -280,7 +280,6 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.organizerBar", "Media Organizer Bar", None, "Photo>Organizer"),
     ("dialog.quickMove", "Assign Destination Subfolder…", None, "Photo>Organizer"),
     ("dialog.quickTags", "Quick Tags…", Some("T"), "Photo>Organizer"),
-    ("dialog.cropPreview", "Crop Preview (16:9 / 24:10)…", None, "Photo>Organizer"),
     ("dialog.convertScreenshots", "Convert Screenshot Filenames…", None, "Photo>Organizer"),
     ("dialog.mystuffPigallery", "Add PiGallery2 URL to MyStuff…", None, "Photo>Organizer"),
 ];

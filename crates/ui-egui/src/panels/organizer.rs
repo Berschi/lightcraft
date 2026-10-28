@@ -1,14 +1,14 @@
 //! Media Organizer UI:
 //! - Organizer Bar above the grid (Todo-folder switcher, Target Folder selector, Assign Subfolder (M),
-//!   Move Images, Show Subfolders toggle, Quick Tags (T), Crop 16:9 / 24:10 + Preview, Screenshot Converter,
+//!   Move Images, Show Subfolders toggle, Quick Tags (T), Crop 16:9 / 24:10, Screenshot Converter,
 //!   Add PiGallery2 URL to MyStuff).
 //! - Staged subfolder badge on grid thumbnails and in Detail / Fullscreen (`F`) view.
-//! - Modal dialogs: `QuickMove` (`M`), `QuickTags` (`T`), `CropPreview`, `ConvertScreenshots`, `MyStuffPigallery`.
+//! - Modal dialogs: `QuickMove` (`M`), `QuickTags` (`T`), `ConvertScreenshots`, `MyStuffPigallery`.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::cmd::organizer::{
     MyStuffGameEntry, MyStuffMediaEntry, ScreenshotPattern, current_source_folder, is_folder_empty, matched_target_root, pigallery_url_for_path,
@@ -51,12 +51,6 @@ pub fn open_quick_move(app: &mut LightcraftApp) {
 /// Open the `QuickTags` (`T`) dialog initialized for the current selection.
 pub fn open_quick_tags(app: &mut LightcraftApp) {
     app.ui.dialog = Some(Dialog::QuickTags { text: String::new(), cursor: 0, fresh: true });
-}
-
-/// Open the `CropPreview` dialog for the current selection.
-pub fn open_crop_preview(app: &mut LightcraftApp, aspect: &str) {
-    let aspect = if aspect.is_empty() { "16x9" } else { aspect };
-    app.ui.dialog = Some(Dialog::CropPreview { aspect: aspect.to_string(), index: 0 });
 }
 
 /// Open the `ConvertScreenshots` dialog initialized from `organizer.detectScreenshots`.
@@ -373,12 +367,6 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     Ok(_) => app.toast(ui.ctx(), "Cropped selected photo(s) to 24:10"),
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }
-            }
-            if text_button(ui, "organizerCropPreview", "Crop Preview…", false)
-                .on_hover_text("Preview 16:9 or 24:10 crop on the selected photo(s) before applying")
-                .clicked()
-            {
-                open_crop_preview(app, "16x9");
             }
 
             ui.separator();
@@ -942,138 +930,6 @@ pub fn show_quick_tags_dialog(
     }
 }
 
-pub fn show_crop_preview_dialog(
-    app: &mut LightcraftApp,
-    ctx: &egui::Context,
-    ui: &mut egui::Ui,
-    aspect: &mut String,
-    index: &mut usize,
-    close: &mut bool,
-) {
-    let t = Tokens::get(ctx);
-    let ids = app.session.selected();
-    if ids.is_empty() {
-        ui.label("No photos selected.");
-        if ui.button("Close").clicked() {
-            *close = true;
-        }
-        return;
-    }
-    if *index >= ids.len() {
-        *index = 0;
-    }
-    let cur_id = ids.get(*index).copied().unwrap_or(PhotoId(0));
-    let Some(photo) = app.session.catalog.photo(cur_id).cloned() else { return };
-
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Aspect Ratio:").color(t.text_dim));
-        for (lbl, key) in [
-            ("16 : 9", "16x9"),
-            ("24 : 10", "24x10"),
-            ("16 : 10", "16x10"),
-            ("4 : 3", "4x3"),
-            ("3 : 2", "2x3"),
-            ("1 : 1", "1x1"),
-            ("Original", "original"),
-        ] {
-            let sel = aspect == key;
-            let b = ui.selectable_label(sel, lbl);
-            register(ui, format!("cropPreviewAspect:{key}"), b.rect);
-            if b.clicked() {
-                *aspect = key.to_string();
-            }
-        }
-    });
-
-    ui.add_space(6.0);
-
-    // Compute preview crop rect in normalized coordinates
-    let swap = photo.develop.orientation.swaps_axes();
-    let (w, h) = if swap { (photo.height.max(1) as f64, photo.width.max(1) as f64) } else { (photo.width.max(1) as f64, photo.height.max(1) as f64) };
-    let ratio = if aspect == "original" {
-        Some(w / h)
-    } else {
-        aspect.split_once(['x', ':']).and_then(|(x, y)| {
-            let x = x.parse::<f64>().ok()?;
-            let y = y.parse::<f64>().ok()?;
-            (x > 0.0 && y > 0.0).then(|| if (w >= h) == (x >= y) { x / y } else { y / x })
-        })
-    };
-    let geom = lightcraft_geom::crop_fit_angle(w, h, photo.develop.crop.geometry.angle, ratio);
-    let r_norm = geom.rect;
-    let out_w = (w * r_norm.width()).round() as u32;
-    let out_h = (h * r_norm.height()).round() as u32;
-
-    ui.horizontal(|ui| {
-        if ids.len() > 1 {
-            if ui.add_enabled(*index > 0, egui::Button::new("◀ Prev")).clicked() {
-                *index = index.saturating_sub(1);
-            }
-            ui.label(format!("Photo {} of {}", *index + 1, ids.len()));
-            if ui.add_enabled(*index + 1 < ids.len(), egui::Button::new("Next ▶")).clicked() {
-                *index = (*index + 1).min(ids.len().saturating_sub(1));
-            }
-            ui.separator();
-        }
-        ui.label(egui::RichText::new(format!("{}  ({} × {}  →  {} × {} px)", photo.file_name, w as u32, h as u32, out_w, out_h)).color(t.text_label));
-    });
-
-    ui.add_space(6.0);
-
-    // Render thumbnail + crop frame overlay
-    super::grid::request_thumb(app, cur_id, 512, 20);
-    let preview_box = vec2(520.0, 320.0);
-    let (canvas, _) = ui.allocate_exact_size(preview_box, Sense::hover());
-    let p = ui.painter_at(canvas);
-    p.rect_filled(canvas, 4.0, Color32::from_gray(22));
-
-    let img_aspect = (w / h).max(0.05) as f32;
-    let fit_size = if canvas.width() / canvas.height() > img_aspect {
-        vec2((canvas.height() - 16.0) * img_aspect, canvas.height() - 16.0)
-    } else {
-        vec2(canvas.width() - 16.0, (canvas.width() - 16.0) / img_aspect)
-    };
-    let img_rect = Rect::from_center_size(canvas.center(), fit_size);
-
-    if let Some(tex) = app.renderer.thumb(cur_id) {
-        p.image(tex.tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    } else {
-        p.rect_filled(img_rect, 0.0, Color32::from_gray(42));
-        p.text(img_rect.center(), Align2::CENTER_CENTER, "Loading preview…", t.font(12.5), t.text_dim);
-    }
-
-    // Draw darkened mask outside the crop rectangle and bright border around the kept region
-    let crop_rect = Rect::from_min_max(
-        pos2(img_rect.left() + img_rect.width() * r_norm.x0 as f32, img_rect.top() + img_rect.height() * r_norm.y0 as f32),
-        pos2(img_rect.left() + img_rect.width() * r_norm.x1 as f32, img_rect.top() + img_rect.height() * r_norm.y1 as f32),
-    );
-    let shade = Color32::from_black_alpha(155);
-    p.rect_filled(Rect::from_min_max(img_rect.min, pos2(img_rect.right(), crop_rect.top())), 0.0, shade);
-    p.rect_filled(Rect::from_min_max(pos2(img_rect.left(), crop_rect.bottom()), img_rect.max), 0.0, shade);
-    p.rect_filled(Rect::from_min_max(pos2(img_rect.left(), crop_rect.top()), pos2(crop_rect.left(), crop_rect.bottom())), 0.0, shade);
-    p.rect_filled(Rect::from_min_max(pos2(crop_rect.right(), crop_rect.top()), pos2(img_rect.right(), crop_rect.bottom())), 0.0, shade);
-    p.rect_stroke(crop_rect, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
-
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        if ui.button("Cancel").clicked() {
-            *close = true;
-        }
-        let apply_label = format!("Apply {} Crop to {} Selected Photo{}", aspect.replace('x', ":"), ids.len(), if ids.len() == 1 { "" } else { "s" });
-        let apply_btn = ui.button(egui::RichText::new(apply_label).color(t.accent));
-        register(ui, "button:cropPreviewApply", apply_btn.rect);
-        if apply_btn.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            match app.run("crop.aspect", json!({"aspect": aspect.clone(), "selection": true})) {
-                Ok(_) => {
-                    app.toast(ctx, format!("Applied {} crop to {} photo(s)", aspect.replace('x', ":"), ids.len()));
-                    *close = true;
-                }
-                Err(e) => app.toast_error(ctx, e),
-            }
-        }
-    });
-}
-
 pub fn show_convert_screenshots_dialog(
     app: &mut LightcraftApp,
     ctx: &egui::Context,
@@ -1503,7 +1359,7 @@ mod tests {
 
         // Render each Organizer dialog headlessly to verify zero panics and widget registration
         let mut view = HeadlessView::new();
-        for cmd in ["dialog.quickMove", "dialog.quickTags", "dialog.cropPreview", "dialog.convertScreenshots", "dialog.mystuffPigallery"] {
+        for cmd in ["dialog.quickMove", "dialog.quickTags", "dialog.convertScreenshots", "dialog.mystuffPigallery"] {
             if cmd == "dialog.mystuffPigallery" {
                 app.session
                     .organizer

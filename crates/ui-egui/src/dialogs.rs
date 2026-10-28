@@ -165,7 +165,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         Dialog::Shortcuts => "Keyboard Shortcuts",
         Dialog::QuickMove { .. } => "Assign Destination Subfolder (M)",
         Dialog::QuickTags { .. } => "Quick Tags (T)",
-        Dialog::CropPreview { .. } => "Crop Preview (16:9 / 24:10)",
         Dialog::ConvertScreenshots { .. } => "Convert Screenshot Filenames",
         Dialog::MyStuffPigallery { .. } => "Add PiGallery2 URL to MyStuff",
         Dialog::ViewOptions => "View Options",
@@ -215,7 +214,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
             Dialog::QuickMove { .. } | Dialog::QuickTags { .. } => 500.0,
-            Dialog::CropPreview { .. } => 600.0,
             Dialog::ConvertScreenshots { .. } | Dialog::MyStuffPigallery { .. } => 680.0,
             _ => 380.0,
         })
@@ -1282,9 +1280,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 Dialog::QuickTags { text, cursor, fresh } => {
                     crate::panels::organizer::show_quick_tags_dialog(app, ctx, ui, text, cursor, fresh, &mut close);
                 }
-                Dialog::CropPreview { aspect, index } => {
-                    crate::panels::organizer::show_crop_preview_dialog(app, ctx, ui, aspect, index, &mut close);
-                }
                 Dialog::ConvertScreenshots { from_pattern, to_pattern, hide_unrenamed, all_visible } => {
                     crate::panels::organizer::show_convert_screenshots_dialog(
                         app,
@@ -1327,7 +1322,6 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 dlg,
                 Dialog::QuickMove { .. }
                     | Dialog::QuickTags { .. }
-                    | Dialog::CropPreview { .. }
                     | Dialog::ConvertScreenshots { .. }
                     | Dialog::MyStuffPigallery { .. }
             );
