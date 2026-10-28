@@ -126,6 +126,9 @@ pub struct AppSettings {
     /// `confirmDelete: false` by default (#1239).
     #[serde(rename = "askBeforeDelete")]
     pub confirm_delete: bool,
+    /// Move photo files and sidecars to the system trash on delete.
+    #[serde(default)]
+    pub trash_on_delete: bool,
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
@@ -216,6 +219,7 @@ impl Default for AppSettings {
             at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
             confirm_delete: true,
+            trash_on_delete: false,
             ask_before_move: true,
             close_dialogs_outside: false,
             import_dropped_directly: false,

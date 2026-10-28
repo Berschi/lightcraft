@@ -36,6 +36,9 @@ pub struct OrganizerState {
     /// Whether all tags of each photo are rendered as pills in a bar beneath the badge bar in the grid.
     #[serde(default)]
     pub show_tags_in_grid: bool,
+    /// Whether photo files and their XMP sidecars are moved to the system trash on delete.
+    #[serde(default)]
+    pub trash_on_delete: bool,
     /// Recently chosen destination subfolders (most recent first).
     pub recent_subfolders: Vec<String>,
     /// Base URL for PiGallery2 (e.g. `https://shirogane.fritz.box/pigallery2`).
@@ -95,6 +98,7 @@ impl Default for OrganizerState {
             target_folder: None,
             show_subfolders_on_images: true,
             show_tags_in_grid: false,
+            trash_on_delete: false,
             recent_subfolders: Vec::new(),
             pigallery_base_url: "https://shirogane.fritz.box/pigallery2".into(),
             mystuff_host: "shirogane".into(),
@@ -469,6 +473,7 @@ fn state_json(s: &mut Session) -> Value {
         "stagedCount": staged.len(),
         "showSubfoldersOnImages": s.organizer.show_subfolders_on_images,
         "showTagsInGrid": s.organizer.show_tags_in_grid,
+        "trashOnDelete": s.organizer.trash_on_delete,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
         "mystuffHost": s.organizer.mystuff_host,
@@ -1556,6 +1561,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "organizer.setTrashOnDelete",
+            "Move to Trash on Delete",
+            [],
+            None,
+            "{enabled?: bool (default: toggle)} — move photo files and sidecars to system trash when deleting photos",
+            always,
+            |s, p| {
+                let enabled = bool_or(p, "enabled", !s.organizer.trash_on_delete);
+                s.organizer.trash_on_delete = enabled;
+                let _ = s.save_prefs();
+                Ok(json!({"trashOnDelete": enabled}))
+            }
+        ),
+        cmd!(
             "organizer.setMapping",
             "Configure Source → Target Root Mapping",
             [],
@@ -1818,5 +1837,70 @@ mod tests {
         let res2 = s.execute("organizer.setShowTagsInGrid", &json!({})).unwrap();
         assert_eq!(res2["showTagsInGrid"], false);
         assert!(!s.organizer.show_tags_in_grid);
+    }
+
+    #[test]
+    fn organizer_set_trash_on_delete_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.trash_on_delete);
+        let res = s.execute("organizer.setTrashOnDelete", &json!({"enabled": true})).unwrap();
+        assert_eq!(res["trashOnDelete"], true);
+        assert!(s.organizer.trash_on_delete);
+
+        let res2 = s.execute("organizer.setTrashOnDelete", &json!({})).unwrap();
+        assert_eq!(res2["trashOnDelete"], false);
+        assert!(!s.organizer.trash_on_delete);
+    }
+
+    #[test]
+    fn photo_delete_with_trash_moves_files_and_sidecars() {
+        let tmp = std::env::temp_dir().join(format!("lc-trash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let p1 = tmp.join("test_trash.jpg");
+        let p1_xmp = tmp.join("test_trash.xmp");
+        std::fs::write(&p1, b"image-data").unwrap();
+        std::fs::write(&p1_xmp, b"<x:xmpmeta/>").unwrap();
+
+        let mut s = Session::new();
+        let path = p1.to_string_lossy().to_string();
+        let photo = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: path.clone() },
+            "test_trash.jpg",
+            "JPG",
+            1920,
+            1080,
+            "2026-03-15T19:42:08",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+
+        // Add a virtual copy (copy_of = Some(PhotoId(1)))
+        let mut copy = lightcraft_catalog::Photo::new(
+            PhotoId(2),
+            Source::File { path: path.clone() },
+            "test_trash.jpg Copy",
+            "JPG",
+            1920,
+            1080,
+            "2026-03-15T19:42:08",
+        );
+        copy.copy_of = Some(PhotoId(1));
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+
+        // 1. Delete virtual copy with trash: true -> file on disk must NOT be deleted
+        s.execute("library.select", &json!({"ids": [2]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [2], "trash": true})).unwrap();
+        assert!(p1.exists(), "virtual copy deletion must not delete physical file");
+        assert!(p1_xmp.exists(), "virtual copy deletion must not delete sidecar");
+
+        // 2. Delete original with trash: true -> file and sidecar must be trashed
+        s.execute("library.select", &json!({"ids": [1]})).unwrap();
+        s.execute("photo.delete", &json!({"ids": [1], "trash": true})).unwrap();
+        assert!(!p1.exists(), "physical file should be moved to trash");
+        assert!(!p1_xmp.exists(), "sidecar should be moved to trash");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -329,6 +329,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             if chk_tags.changed() {
                 let _ = app.run("organizer.setShowTagsInGrid", json!({"show": show_tags}));
             }
+
+            // Move to trash on delete checkbox
+            let mut trash_on_del = app.session.organizer.trash_on_delete;
+            let chk_trash = ui
+                .checkbox(&mut trash_on_del, "Move to trash on delete")
+                .on_hover_text("Move photo files and XMP sidecars to the system trash when deleting photos");
+            register(ui, "check:organizerTrashOnDelete", chk_trash.rect);
+            if chk_trash.changed() {
+                let _ = app.run("organizer.setTrashOnDelete", json!({"enabled": trash_on_del}));
+                app.ui.settings.trash_on_delete = trash_on_del;
+            }
         });
 
         ui.add_space(4.0);
@@ -1556,6 +1567,7 @@ mod tests {
         });
         let widgets = crate::widgets::take_registry(&view.ctx);
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
+        assert!(widgets.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
 
         // Toggle command
         assert!(!app.session.organizer.show_tags_in_grid);

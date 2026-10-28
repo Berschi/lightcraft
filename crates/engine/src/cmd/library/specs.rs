@@ -26,6 +26,40 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn trash_file(path: &std::path::Path) {
+    if let Err(e) = trash::delete(path) {
+        log::warn!("Failed to trash {}: {}", path.display(), e);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn trash_file(_path: &std::path::Path) {}
+
+fn trash_photos_on_disk(s: &mut Session, targets: &[PhotoId]) {
+    for id in targets {
+        s.organizer.staged_moves.remove(id);
+        if let Some(photo) = s.catalog.photo(*id).cloned() {
+            let file_used_elsewhere = s.catalog.photos().any(|other| other.id != *id && other.source == photo.source && !targets.contains(&other.id));
+            if !file_used_elsewhere
+                && photo.copy_of.is_none()
+                && let lightcraft_catalog::Source::File { path } = &photo.source
+            {
+                let file_path = std::path::PathBuf::from(path);
+                let sidecar = crate::sidecar::find_sidecar(path, s.sidecar_naming(*id));
+                if let Some(sc) = sidecar
+                    && sc.exists()
+                {
+                    trash_file(&sc);
+                }
+                if file_path.exists() {
+                    trash_file(&file_path);
+                }
+            }
+        }
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -638,15 +672,31 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         // ---- delete / restore
-        cmd!("photo.delete", "Delete Photo", ["Photo"], Some("Delete"), "{ids?} — moves to Recently Deleted", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let targets = s.targets(p)?;
-            // an open drag ends first, as its own undo step (the selection moves on)
-            s.end_interaction()?;
-            let n = mark_deleted(s, &targets, "Delete")?;
-            select_after_deletion(s, &before);
-            Ok(json!({"changed": n}))
-        }),
+        cmd!(
+            "photo.delete",
+            "Delete Photo",
+            ["Photo"],
+            Some("Delete"),
+            "{ids?, trash?: bool} — moves to Recently Deleted, or system trash if enabled",
+            has_selection,
+            |s, p| {
+                let before = s.visible_cloned();
+                let targets = s.targets(p)?;
+                // an open drag ends first, as its own undo step (the selection moves on)
+                s.end_interaction()?;
+                let trash = p.get("trash").and_then(Value::as_bool).unwrap_or(s.organizer.trash_on_delete);
+                let n = if trash {
+                    trash_photos_on_disk(s, &targets);
+                    let op = s.catalog.delete_photos_permanently_ops(&targets);
+                    s.commit("Delete to Trash", op)?;
+                    targets.len()
+                } else {
+                    mark_deleted(s, &targets, "Delete")?
+                };
+                select_after_deletion(s, &before);
+                Ok(json!({"changed": n, "trashed": trash}))
+            }
+        ),
         cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
             id,
             deleted: false
@@ -656,28 +706,36 @@ pub fn specs() -> Vec<CommandSpec> {
             "Empty Recently Deleted",
             ["Photo"],
             None,
-            "{} → {deleted} — removes every photo in Recently Deleted from the library (files on disk stay)",
+            "{trash?: bool} → {deleted} — removes every photo in Recently Deleted from the library (moves to trash if enabled)",
             always,
-            |s, _| {
+            |s, p| {
                 let ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.deleted).map(|p| p.id).collect();
                 if ids.is_empty() {
                     return Ok(json!({"deleted": 0}));
                 }
+                let trash = p.get("trash").and_then(Value::as_bool).unwrap_or(s.organizer.trash_on_delete);
+                if trash {
+                    trash_photos_on_disk(s, &ids);
+                }
                 let op = s.catalog.delete_photos_permanently_ops(&ids);
                 s.commit("Empty Recently Deleted", op)?;
                 s.selection = Selection::default();
-                Ok(json!({"deleted": ids.len()}))
+                Ok(json!({"deleted": ids.len(), "trashed": trash}))
             }
         ),
-        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
+        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?, trash?: bool}", has_selection, |s, p| {
             let before = s.visible_cloned();
             let t = s.targets(p)?;
             // before the inverse ops are taken, so undo brings the photo back with its edit
             s.end_interaction()?;
+            let trash = p.get("trash").and_then(Value::as_bool).unwrap_or(s.organizer.trash_on_delete);
+            if trash {
+                trash_photos_on_disk(s, &t);
+            }
             let op = s.catalog.delete_photos_permanently_ops(&t);
             s.commit("Delete Permanently", op)?;
             select_after_deletion(s, &before);
-            Ok(json!({"deleted": t.len()}))
+            Ok(json!({"deleted": t.len(), "trashed": trash}))
         }),
         // ---- metadata
         cmd!(

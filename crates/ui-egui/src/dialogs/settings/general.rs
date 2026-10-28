@@ -72,6 +72,11 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    let mut trash_on_delete = app.session.organizer.trash_on_delete || app.ui.settings.trash_on_delete;
+    if check(ui, "settings.trashOnDelete", &mut trash_on_delete, "Move files to system trash when deleting photos") {
+        let _ = app.run("organizer.setTrashOnDelete", serde_json::json!({"enabled": trash_on_delete}));
+        app.ui.settings.trash_on_delete = trash_on_delete;
+    }
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");

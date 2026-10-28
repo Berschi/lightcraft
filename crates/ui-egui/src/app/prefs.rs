@@ -79,6 +79,9 @@ impl LightcraftApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(on));
             self.window_is_fullscreen = on;
         }
+        if self.ui.settings.trash_on_delete && !self.session.organizer.trash_on_delete {
+            self.session.organizer.trash_on_delete = true;
+        }
     }
 
     /// While no display profile is chosen, show previews through the profile of the screen the

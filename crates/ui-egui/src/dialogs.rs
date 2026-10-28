@@ -1175,9 +1175,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     ui.label(egui::RichText::new(crate::i18n::tr("Masks keep their sliders. Export presets first to keep a copy.")).color(t.text_dim));
                 }
                 Dialog::ConfirmDelete { count } => {
+                    let trash = app.session.organizer.trash_on_delete || app.ui.settings.trash_on_delete;
                     let what = if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
-                    ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
-                    ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                    if trash {
+                        ui.label(crate::i18n::tr_format!("Move {what} to the system trash?", what = what));
+                        ui.label(egui::RichText::new(crate::i18n::tr("Files and XMP sidecars will be moved to the system trash.")).color(t.text_dim));
+                    } else {
+                        ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
+                        ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+                    }
                 }
                 Dialog::MovePhotos { ids, name, dont_ask, .. } => {
                     let n = ids.len();
