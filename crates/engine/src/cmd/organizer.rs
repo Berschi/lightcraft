@@ -42,6 +42,9 @@ pub struct OrganizerState {
     /// Whether rating stars are colored by rating level (3 = yellow, 4 = orange, 5 = red).
     #[serde(default)]
     pub colored_rating_stars: bool,
+    /// Whether rating stars are shown in the top-left corner in fullscreen view.
+    #[serde(default)]
+    pub show_rating_in_fullscreen: bool,
     /// Recently chosen destination subfolders (most recent first).
     pub recent_subfolders: Vec<String>,
     /// Base URL for PiGallery2 (e.g. `https://shirogane.fritz.box/pigallery2`).
@@ -103,6 +106,7 @@ impl Default for OrganizerState {
             show_tags_in_grid: false,
             trash_on_delete: false,
             colored_rating_stars: false,
+            show_rating_in_fullscreen: false,
             recent_subfolders: Vec::new(),
             pigallery_base_url: "https://shirogane.fritz.box/pigallery2".into(),
             mystuff_host: "shirogane".into(),
@@ -479,6 +483,7 @@ fn state_json(s: &mut Session) -> Value {
         "showTagsInGrid": s.organizer.show_tags_in_grid,
         "trashOnDelete": s.organizer.trash_on_delete,
         "coloredRatingStars": s.organizer.colored_rating_stars,
+        "showRatingInFullscreen": s.organizer.show_rating_in_fullscreen,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
         "mystuffHost": s.organizer.mystuff_host,
@@ -1609,6 +1614,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "organizer.setShowRatingInFullscreen",
+            "Show Rating Stars in Fullscreen",
+            [],
+            None,
+            "{enabled?: bool (default: toggle)} — show rating stars in the top-left corner in fullscreen preview",
+            always,
+            |s, p| {
+                let enabled = bool_or(p, "enabled", !s.organizer.show_rating_in_fullscreen);
+                s.organizer.show_rating_in_fullscreen = enabled;
+                let _ = s.save_prefs();
+                Ok(json!({"showRatingInFullscreen": enabled}))
+            }
+        ),
+        cmd!(
             "organizer.setMapping",
             "Configure Source → Target Root Mapping",
             [],
@@ -1897,6 +1916,19 @@ mod tests {
         let res2 = s.execute("organizer.setColoredRatingStars", &json!({})).unwrap();
         assert_eq!(res2["coloredRatingStars"], false);
         assert!(!s.organizer.colored_rating_stars);
+    }
+
+    #[test]
+    fn organizer_set_show_rating_in_fullscreen_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.show_rating_in_fullscreen);
+        let res = s.execute("organizer.setShowRatingInFullscreen", &json!({"enabled": true})).unwrap();
+        assert_eq!(res["showRatingInFullscreen"], true);
+        assert!(s.organizer.show_rating_in_fullscreen);
+
+        let res2 = s.execute("organizer.setShowRatingInFullscreen", &json!({})).unwrap();
+        assert_eq!(res2["showRatingInFullscreen"], false);
+        assert!(!s.organizer.show_rating_in_fullscreen);
     }
 
     #[test]

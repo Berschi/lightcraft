@@ -345,6 +345,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("organizer.setColoredRatingStars", json!({"enabled": colored_stars}));
                 app.ui.settings.colored_rating_stars = colored_stars;
             }
+
+            // Show rating stars in fullscreen checkbox
+            let mut rating_fs = app.session.organizer.show_rating_in_fullscreen || app.ui.settings.show_rating_in_fullscreen;
+            let chk_rfs = ui
+                .checkbox(&mut rating_fs, "Show rating stars in fullscreen")
+                .on_hover_text("Show rating stars in the top-left corner when viewing photos in fullscreen (F)");
+            register(ui, "check:organizerShowRatingInFullscreen", chk_rfs.rect);
+            if chk_rfs.changed() {
+                let _ = app.run("organizer.setShowRatingInFullscreen", json!({"enabled": rating_fs}));
+                app.ui.settings.show_rating_in_fullscreen = rating_fs;
+            }
         });
 
         ui.add_space(4.0);
@@ -551,6 +562,65 @@ pub fn loupe_subfolder_badge(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Pho
     let resp = ui.interact(br, egui::Id::unique("loupe-subfolder-badge"), Sense::click());
     if resp.clicked() {
         open_quick_move(app);
+    }
+}
+
+/// Draw the rating stars badge in the top-left corner during Fullscreen (`F`) view.
+pub fn fullscreen_rating_stars(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
+    if !app.ui.fullscreen || !(app.session.organizer.show_rating_in_fullscreen || app.ui.settings.show_rating_in_fullscreen) {
+        return;
+    }
+    let t = Tokens::get(p.ctx());
+    let extent = super::detail::info_overlay_extent(app, p, photo);
+    let controls = app.ui.fullscreen && app.integrated_titlebar && !app.window_is_fullscreen;
+    let y = canvas.top()
+        + if extent > 0.0 {
+            extent + 6.0
+        } else if controls {
+            t.top_bar_h + 8.0
+        } else {
+            14.0
+        };
+    let x = canvas.left() + 14.0;
+
+    let side = 14.0;
+    let step = 17.0;
+    let pill_w = 5.0 * step + 8.0;
+    let pill_h = 24.0;
+    let pill_rect = Rect::from_min_size(pos2(x, y), vec2(pill_w, pill_h));
+
+    // Dark translucent pill background with rounded corners
+    p.rect_filled(pill_rect, 6.0, Color32::from_black_alpha(150));
+
+    let colored = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
+    let star_color = crate::rating::rating_color(photo.rating, colored, t.star);
+    let star_y = pill_rect.center().y;
+    let star_start_x = pill_rect.left() + 5.0;
+
+    for i in 0..5 {
+        let star_x = star_start_x + (i as f32) * step;
+        let star_rect = Rect::from_center_size(pos2(star_x + side / 2.0, star_y), vec2(side, side));
+        if i < photo.rating {
+            crate::icons::paint(p, star_rect.translate(vec2(1.0, 1.0)), crate::icons::Icon::StarFilled, Color32::from_black_alpha(180));
+            crate::icons::paint(p, star_rect, crate::icons::Icon::StarFilled, star_color);
+        } else {
+            crate::icons::paint(p, star_rect, crate::icons::Icon::Star, Color32::from_white_alpha(70));
+        }
+    }
+
+    register(ui, "loupe:fullscreenRating", pill_rect);
+    let resp = ui.interact(pill_rect, egui::Id::unique("loupe-fullscreen-rating"), Sense::click());
+    if resp.clicked()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let rel_x = pos.x - star_start_x;
+        if rel_x >= 0.0 {
+            let star_idx = (rel_x / step).floor() as u8 + 1;
+            if (1..=5).contains(&star_idx) {
+                let new_rating = if photo.rating == star_idx { 0 } else { star_idx };
+                let _ = app.run("photo.rate", json!({"rating": new_rating}));
+            }
+        }
     }
 }
 
@@ -1437,6 +1507,7 @@ mod tests {
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerColoredRatingStars"));
+        assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowRatingInFullscreen"));
 
         // Toggle command
         assert!(!app.session.organizer.show_tags_in_grid);
@@ -1477,5 +1548,26 @@ mod tests {
             let expected_h = 3.0 * 2.0 + (l_multi.lines.len() as f32) * 16.0 + ((l_multi.lines.len() - 1) as f32) * 3.0;
             assert_eq!(l_multi.total_height, expected_h);
         });
+    }
+
+    #[test]
+    fn fullscreen_rating_stars_renders_in_fullscreen() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let id = session.visible_cloned()[0];
+        session.execute("photo.rate", &json!({"ids": [id.0], "rating": 4})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.ui.fullscreen = true;
+        app.session.organizer.show_rating_in_fullscreen = true;
+        app.session.organizer.colored_rating_stars = true;
+
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1920.0, 1080.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            crate::panels::detail::show(&mut app, ui);
+        });
+
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "loupe:fullscreenRating"));
     }
 }

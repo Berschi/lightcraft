@@ -86,7 +86,7 @@ fn info_overlay_font(t: &Tokens, i: usize) -> egui::FontId {
 
 /// How far below the canvas' top the info overlay's text and badges reach (0 when it is off), so a
 /// label drawn in that corner can sit below it.
-pub(super) fn info_overlay_extent(app: &LightcraftApp, p: &egui::Painter, photo: &lightcraft_catalog::Photo) -> f32 {
+pub(crate) fn info_overlay_extent(app: &LightcraftApp, p: &egui::Painter, photo: &lightcraft_catalog::Photo) -> f32 {
     let Some(lines) = info_overlay_lines(app, photo) else { return 0.0 };
     let t = Tokens::get(p.ctx());
     let text = lines.iter().enumerate().fold(info_overlay_top(app, &t), |y, (i, l)| {

@@ -85,6 +85,9 @@ impl LightcraftApp {
         if self.ui.settings.colored_rating_stars && !self.session.organizer.colored_rating_stars {
             self.session.organizer.colored_rating_stars = true;
         }
+        if self.ui.settings.show_rating_in_fullscreen && !self.session.organizer.show_rating_in_fullscreen {
+            self.session.organizer.show_rating_in_fullscreen = true;
+        }
     }
 
     /// While no display profile is chosen, show previews through the profile of the screen the
