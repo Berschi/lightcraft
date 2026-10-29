@@ -231,8 +231,23 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
-        Dialog::QuickMove { subfolder, .. } => {
-            let sub = if subfolder.trim().is_empty() { "." } else { subfolder.trim() };
+        Dialog::QuickMove { subfolder, cursor, .. } => {
+            let sub = if !subfolder.trim().is_empty() {
+                subfolder.trim().to_string()
+            } else {
+                let current = app
+                    .session
+                    .active()
+                    .and_then(|id| app.session.organizer.staged_moves.get(&id))
+                    .cloned()
+                    .or_else(|| app.session.organizer.recent_subfolders.first().cloned())
+                    .unwrap_or_default();
+                let target_folder = app.session.organizer.target_folder.clone().unwrap_or_default();
+                let recent = app.session.organizer.recent_subfolders.clone();
+                let all_subs = app.session.organizer.subfolders_for(&target_folder).to_vec();
+                let matches = crate::panels::organizer::initial_quick_move_matches(&all_subs, &recent, &current);
+                matches.get(*cursor).cloned().unwrap_or_else(|| ".".to_string())
+            };
             app.run("organizer.stageSubfolder", json!({"subfolder": sub}))
         }
         Dialog::QuickTags { text, .. } => {

@@ -40,7 +40,30 @@ fn short_folder_name(path: &str) -> String {
     Path::new(trimmed).file_name().map(|n| n.to_string_lossy().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| trimmed.to_string())
 }
 
+/// Compute the initial subfolder match list when the search query is empty:
+/// recent subfolders first (if present in target folder or matching `current`), then `current` if non-empty, then all other subfolders.
+pub fn initial_quick_move_matches(all_subs: &[String], recent: &[String], current: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(all_subs.len().min(128));
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::with_capacity(all_subs.len() + recent.len() + 1);
+    for r in recent {
+        if (all_subs.binary_search(r).is_ok() || r == current) && seen.insert(r.as_str()) {
+            out.push(r.clone());
+        }
+    }
+    if !current.is_empty() && seen.insert(current) {
+        out.push(current.to_string());
+    }
+    for s in all_subs {
+        if seen.insert(s.as_str()) {
+            out.push(s.clone());
+        }
+    }
+    out
+}
+
 /// Open the `QuickMove` (`M`) dialog initialized for the current selection.
+/// The text field is intentionally kept empty so the user can immediately type a new folder name,
+/// but `cursor` pre-selects the last assigned / recent subfolder so pressing Enter immediately assigns it.
 pub fn open_quick_move(app: &mut LightcraftApp) {
     sync_target_folder_for_source(&mut app.session);
     let current = app
@@ -50,7 +73,12 @@ pub fn open_quick_move(app: &mut LightcraftApp) {
         .cloned()
         .or_else(|| app.session.organizer.recent_subfolders.first().cloned())
         .unwrap_or_default();
-    app.ui.dialog = Some(Dialog::QuickMove { subfolder: current, cursor: 0, fresh: true });
+    let target_folder = app.session.organizer.target_folder.clone().unwrap_or_default();
+    let recent = app.session.organizer.recent_subfolders.clone();
+    let all_subs = app.session.organizer.subfolders_for(&target_folder).to_vec();
+    let initial_matches = initial_quick_move_matches(&all_subs, &recent, &current);
+    let initial_cursor = initial_matches.iter().position(|m| m.eq_ignore_ascii_case(&current)).unwrap_or(0);
+    app.ui.dialog = Some(Dialog::QuickMove { subfolder: String::new(), cursor: initial_cursor, fresh: true });
 }
 
 /// Open the `QuickTags` (`T`) dialog initialized for the current selection.
@@ -726,49 +754,54 @@ pub fn show_quick_move_dialog(
     ui.add_space(6.0);
 
     // Gather available subfolders from the in-memory session cache (zero disk I/O per frame),
-    // and cache the filtered `matches` list by `(target_folder, query, subfolder_count, recent_subfolders)`
+    // and cache the filtered `matches` list by `(target_folder, query, subfolder_count, recent_subfolders, current)`
     // so filtering only runs when the query text or folder list changes.
     let q = subfolder.trim().to_lowercase();
+    let current = app
+        .session
+        .active()
+        .and_then(|id| app.session.organizer.staged_moves.get(&id))
+        .cloned()
+        .or_else(|| app.session.organizer.recent_subfolders.first().cloned())
+        .unwrap_or_default();
     let recent = app.session.organizer.recent_subfolders.clone();
-    let all_subs = app.session.organizer.subfolders_for(&target_folder);
+    let all_subs = app.session.organizer.subfolders_for(&target_folder).to_vec();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    (&target_folder, &q, all_subs, &recent).hash(&mut hasher);
+    (&target_folder, &q, &all_subs, &recent, &current).hash(&mut hasher);
     let filter_key = hasher.finish();
     let cache_id = egui::Id::unique("quick-move-filtered-matches");
 
     let matches: Vec<String> = match ctx.data(|d| d.get_temp::<(u64, Vec<String>)>(cache_id)) {
         Some((k, cached)) if k == filter_key => cached,
         _ => {
-            let mut out = Vec::with_capacity(all_subs.len().min(128));
-            if q.is_empty() {
-                let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::with_capacity(all_subs.len());
-                for r in &recent {
-                    if all_subs.binary_search(r).is_ok() && seen.insert(r.as_str()) {
-                        out.push(r.clone());
-                    }
-                }
-                for s in all_subs {
-                    if seen.insert(s.as_str()) {
-                        out.push(s.clone());
-                    }
-                }
+            let out = if q.is_empty() {
+                initial_quick_move_matches(&all_subs, &recent, &current)
             } else {
                 // Single-pass O(N) partition: prefix matches first, then substring matches
+                let mut pref_matches = Vec::new();
                 let mut sub_matches = Vec::new();
-                for s in all_subs {
+                for s in &all_subs {
                     let sl = s.to_lowercase();
                     if sl.starts_with(&q) || sl.split('/').any(|part| part.starts_with(&q)) {
-                        out.push(s.clone());
+                        pref_matches.push(s.clone());
                     } else if sl.contains(&q) {
                         sub_matches.push(s.clone());
                     }
                 }
-                out.extend(sub_matches);
-            }
+                pref_matches.extend(sub_matches);
+                pref_matches
+            };
             ctx.data_mut(|d| d.insert_temp(cache_id, (filter_key, out.clone())));
             out
         }
     };
+
+    if *fresh
+        && !current.is_empty()
+        && let Some(pos) = matches.iter().position(|m| m.eq_ignore_ascii_case(&current))
+    {
+        *cursor = pos;
+    }
 
     if *cursor >= matches.len() {
         *cursor = 0;
@@ -845,6 +878,18 @@ pub fn show_quick_move_dialog(
     let typed_clean = subfolder.trim().trim_matches('/').to_string();
     let exact_exists = matches.iter().any(|m| m.eq_ignore_ascii_case(&typed_clean));
 
+    let chosen_sub = || -> String {
+        if let Some(m) = matches.get(*cursor) {
+            m.clone()
+        } else if typed_clean.is_empty() {
+            ".".to_string()
+        } else {
+            typed_clean.clone()
+        }
+    };
+    let chosen = chosen_sub();
+    let short_chosen = if chosen.chars().count() > 28 { format!("{}…", chosen.chars().take(27).collect::<String>()) } else { chosen.clone() };
+
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui.button("Cancel").clicked() {
@@ -861,27 +906,29 @@ pub fn show_quick_move_dialog(
                 trigger_create = true;
             }
         }
-        let assign_btn = ui.button(egui::RichText::new("Assign (Enter)").color(t.accent));
+        let assign_label = if !chosen.is_empty() && chosen != "." {
+            format!("Assign “{short_chosen}” (Enter)")
+        } else if chosen == "." {
+            "Assign Root “.” (Enter)".to_string()
+        } else {
+            "Assign (Enter)".to_string()
+        };
+        let assign_btn = ui.button(egui::RichText::new(assign_label).color(t.accent));
         register(ui, "button:quickMoveAssign", assign_btn.rect);
         if assign_btn.clicked() {
             trigger_assign = true;
         }
-        let move_now_btn = ui.button("Assign & Move Now (Ctrl+Enter)");
+        let move_now_label = if !chosen.is_empty() && chosen != "." {
+            format!("Assign & Move to “{short_chosen}” (Ctrl+Enter)")
+        } else {
+            "Assign & Move Now (Ctrl+Enter)".to_string()
+        };
+        let move_now_btn = ui.button(move_now_label);
         register(ui, "button:quickMoveNow", move_now_btn.rect);
         if move_now_btn.clicked() {
             trigger_move_now = true;
         }
     });
-
-    let chosen_sub = || -> String {
-        if let Some(m) = matches.get(*cursor) {
-            m.clone()
-        } else if typed_clean.is_empty() {
-            ".".to_string()
-        } else {
-            typed_clean.clone()
-        }
-    };
 
     if trigger_create {
         match app.run("organizer.createSubfolder", json!({"subfolder": typed_clean, "assignToSelection": true})) {
@@ -892,7 +939,6 @@ pub fn show_quick_move_dialog(
             Err(e) => app.toast_error(ctx, e),
         }
     } else if trigger_assign || trigger_move_now {
-        let chosen = chosen_sub();
         // If the user typed a brand-new subfolder path that had no matches, create it automatically
         let res = if matches.is_empty() && chosen != "." && !chosen.is_empty() {
             app.run("organizer.createSubfolder", json!({"subfolder": chosen, "assignToSelection": true}))
@@ -1822,5 +1868,62 @@ mod tests {
         assert!(kws_final.contains(&"Urlaub".to_string()), "Must add clicked tag 'Urlaub'");
         assert!(kws_final.contains(&"unser Haus".to_string()));
         assert_eq!(kws_final.len(), 2);
+    }
+
+    #[test]
+    fn quick_move_dialog_preselects_last_subfolder_with_empty_text_input() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let ids: Vec<u64> = session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+        session.execute("library.select", &json!({"ids": ids})).unwrap();
+
+        // 1. Stage "_Lea/alleine" on the active photo
+        session.execute("organizer.stageSubfolder", &json!({"subfolder": "_Lea/alleine"})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        let mut view = HeadlessView::new();
+
+        // Open QuickMove dialog via helper
+        super::open_quick_move(&mut app);
+
+        // Verify subfolder is initialized to empty string, but dialog is active
+        let Some(Dialog::QuickMove { ref subfolder, cursor, fresh }) = app.ui.dialog else {
+            panic!("QuickMove dialog should be open");
+        };
+        assert_eq!(subfolder, "", "Text field must be empty so user can immediately type");
+        assert!(fresh);
+        let _ = cursor;
+
+        // Render first frame: text field receives focus, list highlights "_Lea/alleine"
+        let raw = HeadlessView::raw_input(vec2(1000.0, 800.0), 1.0, 0.1, vec![]);
+        view.run(raw, |ui| {
+            crate::panels::dialogs::show(&mut app, ui.ctx(), false);
+        });
+
+        // Press Enter without typing: assigns the preselected "_Lea/alleine"
+        let raw_enter = HeadlessView::raw_input(
+            vec2(1000.0, 800.0),
+            1.0,
+            0.2,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: Some(egui::Key::Enter),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        view.run(raw_enter, |ui| {
+            crate::panels::dialogs::show(&mut app, ui.ctx(), false);
+        });
+
+        // Dialog should be closed and "_Lea/alleine" assigned
+        assert!(app.ui.dialog.is_none(), "Dialog should close on Enter");
+        for id in &ids {
+            assert_eq!(
+                app.session.organizer.staged_moves.get(&PhotoId(*id)),
+                Some(&"_Lea/alleine".to_string()),
+                "Pressing Enter must assign preselected subfolder"
+            );
+        }
     }
 }
