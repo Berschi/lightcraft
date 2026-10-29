@@ -396,6 +396,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     app.ui.settings.show_rating_in_fullscreen = rating_fs;
                 }
 
+                // Show progress in fullscreen checkbox
+                let mut progress_fs = app.session.organizer.show_progress_in_fullscreen || app.ui.settings.show_progress_in_fullscreen;
+                let chk_pfs = ui
+                    .checkbox(&mut progress_fs, "Show progress in fullscreen")
+                    .on_hover_text("Show image progress index (e.g. 4/21) in the bottom-left corner when viewing photos in fullscreen (F)");
+                register(ui, "check:organizerShowProgressInFullscreen", chk_pfs.rect);
+                if chk_pfs.changed() {
+                    let _ = app.run("organizer.setShowProgressInFullscreen", json!({"enabled": progress_fs}));
+                    app.ui.settings.show_progress_in_fullscreen = progress_fs;
+                }
+
                 // Show only letterboxed images checkbox
                 let mut filter_lb = app.session.organizer.filter_letterbox || app.ui.settings.filter_letterbox;
                 let chk_lb = ui
@@ -709,6 +720,38 @@ pub fn fullscreen_rating_stars(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &e
             }
         }
     }
+}
+
+/// Draw the image progress index (e.g. "4/21") in the bottom-left corner during Fullscreen (`F`) view.
+pub fn fullscreen_progress(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, canvas: Rect, photo: &lightcraft_catalog::Photo) {
+    if !app.ui.fullscreen || !(app.session.organizer.show_progress_in_fullscreen || app.ui.settings.show_progress_in_fullscreen) {
+        return;
+    }
+    let visible = app.session.visible();
+    if visible.is_empty() {
+        return;
+    }
+    let total = visible.len();
+    let cur_idx = visible.iter().position(|id| *id == photo.id).map(|pos| pos + 1).unwrap_or(1);
+    let text = format!("{cur_idx}/{total}");
+
+    let t = Tokens::get(p.ctx());
+    let font = t.semibold(12.5);
+    let g = p.layout_no_wrap(text, font, Color32::WHITE);
+
+    let pad_x = 8.0;
+    let pad_y = 4.0;
+    let pill_w = g.size().x + pad_x * 2.0;
+    let pill_h = (g.size().y + pad_y * 2.0).max(22.0);
+
+    let margin = 14.0;
+    let pill_rect = Rect::from_min_size(pos2(canvas.left() + margin, canvas.bottom() - pill_h - margin), vec2(pill_w, pill_h));
+
+    // Dark translucent pill background with rounded corners
+    p.rect_filled(pill_rect, 4.0, Color32::from_black_alpha(150));
+    p.galley(pos2(pill_rect.left() + pad_x, pill_rect.center().y - g.size().y / 2.0), g, Color32::WHITE);
+
+    register(ui, "loupe:fullscreenProgress", pill_rect);
 }
 
 // ---------- Modal Dialogs ----------
@@ -1743,6 +1786,33 @@ mod tests {
 
         let widgets = crate::widgets::take_registry(&view.ctx);
         assert!(widgets.iter().any(|(w, _)| w == "loupe:fullscreenRating"));
+    }
+
+    #[test]
+    fn fullscreen_progress_renders_in_fullscreen() {
+        let session = lightcraft_engine::Session::with_demo();
+        let mut app = LightcraftApp::new(session, Services::default());
+        app.ui.fullscreen = true;
+        app.session.organizer.show_progress_in_fullscreen = true;
+
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1920.0, 1080.0), 1.0, 0.5, vec![]);
+        view.run(raw, |ui| {
+            crate::panels::detail::show(&mut app, ui);
+        });
+
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "loupe:fullscreenProgress"));
+
+        // When option is disabled, it does not render
+        app.session.organizer.show_progress_in_fullscreen = false;
+        app.ui.settings.show_progress_in_fullscreen = false;
+        let raw2 = HeadlessView::raw_input(vec2(1920.0, 1080.0), 1.0, 0.5, vec![]);
+        view.run(raw2, |ui| {
+            crate::panels::detail::show(&mut app, ui);
+        });
+        let widgets2 = crate::widgets::take_registry(&view.ctx);
+        assert!(!widgets2.iter().any(|(w, _)| w == "loupe:fullscreenProgress"));
     }
 
     #[test]

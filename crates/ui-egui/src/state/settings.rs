@@ -135,6 +135,9 @@ pub struct AppSettings {
     /// Show rating stars in the top-left corner in fullscreen view.
     #[serde(default)]
     pub show_rating_in_fullscreen: bool,
+    /// Show image progress index (e.g. 4/21) in the bottom-left corner in fullscreen view.
+    #[serde(default)]
+    pub show_progress_in_fullscreen: bool,
     /// Show only letterboxed photos (with horizontal black bars top and bottom) in Organizer.
     #[serde(default)]
     pub filter_letterbox: bool,
@@ -231,6 +234,7 @@ impl Default for AppSettings {
             trash_on_delete: false,
             colored_rating_stars: false,
             show_rating_in_fullscreen: false,
+            show_progress_in_fullscreen: false,
             filter_letterbox: false,
             ask_before_move: true,
             close_dialogs_outside: false,

@@ -45,6 +45,9 @@ pub struct OrganizerState {
     /// Whether rating stars are shown in the top-left corner in fullscreen view.
     #[serde(default)]
     pub show_rating_in_fullscreen: bool,
+    /// Whether an image progress index (e.g. 4/21) is shown in the bottom-left corner in fullscreen view.
+    #[serde(default)]
+    pub show_progress_in_fullscreen: bool,
     /// Whether only letterboxed photos (with horizontal black bars top and bottom) are shown.
     #[serde(default)]
     pub filter_letterbox: bool,
@@ -113,6 +116,7 @@ impl Default for OrganizerState {
             trash_on_delete: false,
             colored_rating_stars: false,
             show_rating_in_fullscreen: false,
+            show_progress_in_fullscreen: false,
             filter_letterbox: false,
             letterbox_cache: BTreeMap::new(),
             recent_subfolders: Vec::new(),
@@ -493,6 +497,7 @@ fn state_json(s: &mut Session) -> Value {
         "trashOnDelete": s.organizer.trash_on_delete,
         "coloredRatingStars": s.organizer.colored_rating_stars,
         "showRatingInFullscreen": s.organizer.show_rating_in_fullscreen,
+        "showProgressInFullscreen": s.organizer.show_progress_in_fullscreen,
         "filterLetterbox": s.organizer.filter_letterbox,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
@@ -1696,6 +1701,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "organizer.setShowProgressInFullscreen",
+            "Show Progress Index in Fullscreen",
+            [],
+            None,
+            "{enabled?: bool (default: toggle)} — show image progress index (e.g. 4/21) in the bottom-left corner in fullscreen preview",
+            always,
+            |s, p| {
+                let enabled = bool_or(p, "enabled", !s.organizer.show_progress_in_fullscreen);
+                s.organizer.show_progress_in_fullscreen = enabled;
+                let _ = s.save_prefs();
+                Ok(json!({"showProgressInFullscreen": enabled}))
+            }
+        ),
+        cmd!(
             "organizer.setFilterLetterbox",
             "Filter Letterbox Images",
             [],
@@ -2013,6 +2032,19 @@ mod tests {
         let res2 = s.execute("organizer.setShowRatingInFullscreen", &json!({})).unwrap();
         assert_eq!(res2["showRatingInFullscreen"], false);
         assert!(!s.organizer.show_rating_in_fullscreen);
+    }
+
+    #[test]
+    fn organizer_set_show_progress_in_fullscreen_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.show_progress_in_fullscreen);
+        let res = s.execute("organizer.setShowProgressInFullscreen", &json!({"enabled": true})).unwrap();
+        assert_eq!(res["showProgressInFullscreen"], true);
+        assert!(s.organizer.show_progress_in_fullscreen);
+
+        let res2 = s.execute("organizer.setShowProgressInFullscreen", &json!({})).unwrap();
+        assert_eq!(res2["showProgressInFullscreen"], false);
+        assert!(!s.organizer.show_progress_in_fullscreen);
     }
 
     #[test]

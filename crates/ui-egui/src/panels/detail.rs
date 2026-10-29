@@ -869,6 +869,7 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
     transform_grid(app, p, img_rect);
     if o.fullscreen {
         super::organizer::fullscreen_rating_stars(app, ui, p, canvas, o.photo);
+        super::organizer::fullscreen_progress(app, ui, p, canvas, o.photo);
     }
 }
 
