@@ -263,9 +263,13 @@ impl Rgb32f {
             return false;
         }
 
-        let top_y = (h * 2 / 100).clamp(1, h / 8);
-        let bot_y = h.saturating_sub(top_y + 1).max(top_y + 1);
-        if bot_y <= top_y || bot_y >= h {
+        let top_1 = (h * 15 / 1000).max(1);
+        let top_2 = (h * 30 / 1000).max(2);
+        let bot_2 = h.saturating_sub(top_2 + 1);
+        let bot_1 = h.saturating_sub(top_1 + 1);
+        let bot_0 = h.saturating_sub(1);
+
+        if bot_2 <= top_2 || bot_0 >= h {
             return false;
         }
 
@@ -274,16 +278,19 @@ impl Rgb32f {
                 return false;
             }
             let row = self.row(y);
+            let mut sum_lum = 0.0f32;
             let mut black_count = 0usize;
             for px in row {
-                if px[0] <= 0.1 && px[1] <= 0.1 && px[2] <= 0.1 {
+                let max_c = px[0].max(px[1]).max(px[2]);
+                if max_c <= 0.048 {
                     black_count += 1;
                 }
+                sum_lum += max_c;
             }
-            black_count * 100 >= w * 95
+            black_count * 100 >= w * 95 && sum_lum <= (w as f32) * 0.025
         };
 
-        if !is_row_black(0) || !is_row_black(top_y) || !is_row_black(bot_y) || !is_row_black(h.saturating_sub(1)) {
+        if !is_row_black(0) || !is_row_black(top_1) || !is_row_black(top_2) || !is_row_black(bot_2) || !is_row_black(bot_1) || !is_row_black(bot_0) {
             return false;
         }
 
@@ -293,7 +300,7 @@ impl Rgb32f {
         for y in (mid_start..mid_end).step_by(2) {
             let row = self.row(y);
             for px in row {
-                if px[0] > 0.15 || px[1] > 0.15 || px[2] > 0.15 {
+                if px[0] > 0.14 || px[1] > 0.14 || px[2] > 0.14 {
                     has_content = true;
                     break;
                 }
@@ -352,9 +359,13 @@ impl Rgba8 {
             return false;
         }
 
-        let top_y = (h * 2 / 100).clamp(1, h / 8);
-        let bot_y = h.saturating_sub(top_y + 1).max(top_y + 1);
-        if bot_y <= top_y || bot_y >= h {
+        let top_1 = (h * 15 / 1000).max(1);
+        let top_2 = (h * 30 / 1000).max(2);
+        let bot_2 = h.saturating_sub(top_2 + 1);
+        let bot_1 = h.saturating_sub(top_1 + 1);
+        let bot_0 = h.saturating_sub(1);
+
+        if bot_2 <= top_2 || bot_0 >= h {
             return false;
         }
 
@@ -363,17 +374,19 @@ impl Rgba8 {
                 return false;
             }
             let row = self.row(y);
+            let mut sum_lum = 0u64;
             let mut black_count = 0usize;
             for px in row {
-                // Allow compression noise up to 25/255
-                if px[0] <= 25 && px[1] <= 25 && px[2] <= 25 {
+                let max_c = px[0].max(px[1]).max(px[2]);
+                if max_c <= 12 {
                     black_count += 1;
                 }
+                sum_lum += max_c as u64;
             }
-            black_count * 100 >= w * 95
+            black_count * 100 >= w * 95 && sum_lum <= (w as u64) * 6
         };
 
-        if !is_row_black(0) || !is_row_black(top_y) || !is_row_black(bot_y) || !is_row_black(h.saturating_sub(1)) {
+        if !is_row_black(0) || !is_row_black(top_1) || !is_row_black(top_2) || !is_row_black(bot_2) || !is_row_black(bot_1) || !is_row_black(bot_0) {
             return false;
         }
 
@@ -384,7 +397,7 @@ impl Rgba8 {
         for y in (mid_start..mid_end).step_by(2) {
             let row = self.row(y);
             for px in row {
-                if px[0] > 40 || px[1] > 40 || px[2] > 40 {
+                if px[0] > 35 || px[1] > 35 || px[2] > 35 {
                     has_content = true;
                     break;
                 }
@@ -512,5 +525,10 @@ mod tests {
         let top_only = Rgba8::from_fn(100, 100, |_x, y| if y < 10 { [0, 0, 0, 255] } else { [200, 150, 100, 255] });
         assert!(!top_only.is_letterboxed());
         assert!(!top_only.to_linear().is_letterboxed());
+
+        // Dark scene without bars (ambient dark [16, 16, 16] across the image)
+        let dark_scene = Rgba8::filled(100, 100, [16, 16, 16, 255]);
+        assert!(!dark_scene.is_letterboxed());
+        assert!(!dark_scene.to_linear().is_letterboxed());
     }
 }
