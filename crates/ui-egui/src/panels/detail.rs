@@ -42,8 +42,7 @@ pub(crate) use geometry::{fit_rect, fit_texture_rect, focus_pan, navigate_gestur
 #[cfg(test)]
 use info::RENDERING_AFTER_SECS;
 use info::{
-    FILTER_PILL_HEIGHT, FILTER_PILL_INSET, brief_info, filter_pill, filter_pill_shown, info_overlay, label_badge_rect,
-    preview_only_pill, quick_name,
+    FILTER_PILL_HEIGHT, FILTER_PILL_INSET, brief_info, filter_pill, filter_pill_shown, info_overlay, label_badge_rect, preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, info_overlay_extent, loupe_pill, rendering_overdue};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};

@@ -306,56 +306,72 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 }
             }
 
-            // Show target folder badges on images checkbox
-            let mut show_sub = app.session.organizer.show_subfolders_on_images;
-            let chk = ui
-                .checkbox(&mut show_sub, "Show target folder badges")
-                .on_hover_text("Show the staged destination subfolder badge (→ folder) on photos in the grid");
-            register(ui, "check:organizerShowSubfolders", chk.rect);
-            if chk.changed() {
-                let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
-            }
+            ui.separator();
 
-            // Show tags in grid checkbox
-            let mut show_tags = app.session.organizer.show_tags_in_grid;
-            let chk_tags = ui.checkbox(&mut show_tags, "Show tags in grid");
-            register(ui, "check:organizerShowTagsInGrid", chk_tags.rect);
-            if chk_tags.changed() {
-                let _ = app.run("organizer.setShowTagsInGrid", json!({"show": show_tags}));
-            }
+            // Options popover dropdown
+            let opt_drop = crate::widgets::dropdown(ui, "organizerOptions", "Options", t.font(12.0), t.text_label)
+                .on_hover_text("Organizer display and file settings");
+            egui::Popup::menu(&opt_drop).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                ui.set_min_width(240.0);
+                ui.spacing_mut().item_spacing.y = 6.0;
 
-            // Move to trash on delete checkbox
-            let mut trash_on_del = app.session.organizer.trash_on_delete;
-            let chk_trash = ui
-                .checkbox(&mut trash_on_del, "Move to trash on delete")
-                .on_hover_text("Move photo files and XMP sidecars to the system trash when deleting photos");
-            register(ui, "check:organizerTrashOnDelete", chk_trash.rect);
-            if chk_trash.changed() {
-                let _ = app.run("organizer.setTrashOnDelete", json!({"enabled": trash_on_del}));
-                app.ui.settings.trash_on_delete = trash_on_del;
-            }
+                ui.label(egui::RichText::new("Display").font(t.semibold(11.0)).color(t.text_dim));
 
-            // Colored rating stars checkbox
-            let mut colored_stars = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
-            let chk_stars = ui
-                .checkbox(&mut colored_stars, "Colored rating stars")
-                .on_hover_text("Color rating stars in the grid: 3 = yellow, 4 = orange, 5 = red");
-            register(ui, "check:organizerColoredRatingStars", chk_stars.rect);
-            if chk_stars.changed() {
-                let _ = app.run("organizer.setColoredRatingStars", json!({"enabled": colored_stars}));
-                app.ui.settings.colored_rating_stars = colored_stars;
-            }
+                // Show target folder badges on images checkbox
+                let mut show_sub = app.session.organizer.show_subfolders_on_images;
+                let chk = ui
+                    .checkbox(&mut show_sub, "Show target folder badges")
+                    .on_hover_text("Show the staged destination subfolder badge (→ folder) on photos in the grid");
+                register(ui, "check:organizerShowSubfolders", chk.rect);
+                if chk.changed() {
+                    let _ = app.run("organizer.setShowSubfolders", json!({"show": show_sub}));
+                }
 
-            // Show rating stars in fullscreen checkbox
-            let mut rating_fs = app.session.organizer.show_rating_in_fullscreen || app.ui.settings.show_rating_in_fullscreen;
-            let chk_rfs = ui
-                .checkbox(&mut rating_fs, "Show rating stars in fullscreen")
-                .on_hover_text("Show rating stars in the top-left corner when viewing photos in fullscreen (F)");
-            register(ui, "check:organizerShowRatingInFullscreen", chk_rfs.rect);
-            if chk_rfs.changed() {
-                let _ = app.run("organizer.setShowRatingInFullscreen", json!({"enabled": rating_fs}));
-                app.ui.settings.show_rating_in_fullscreen = rating_fs;
-            }
+                // Show tags in grid checkbox
+                let mut show_tags = app.session.organizer.show_tags_in_grid;
+                let chk_tags = ui.checkbox(&mut show_tags, "Show tags in grid").on_hover_text("Show assigned tags under thumbnails in the grid");
+                register(ui, "check:organizerShowTagsInGrid", chk_tags.rect);
+                if chk_tags.changed() {
+                    let _ = app.run("organizer.setShowTagsInGrid", json!({"show": show_tags}));
+                }
+
+                // Colored rating stars checkbox
+                let mut colored_stars = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
+                let chk_stars = ui
+                    .checkbox(&mut colored_stars, "Colored rating stars")
+                    .on_hover_text("Color rating stars in the grid: 3 = yellow, 4 = orange, 5 = red");
+                register(ui, "check:organizerColoredRatingStars", chk_stars.rect);
+                if chk_stars.changed() {
+                    let _ = app.run("organizer.setColoredRatingStars", json!({"enabled": colored_stars}));
+                    app.ui.settings.colored_rating_stars = colored_stars;
+                }
+
+                // Show rating stars in fullscreen checkbox
+                let mut rating_fs = app.session.organizer.show_rating_in_fullscreen || app.ui.settings.show_rating_in_fullscreen;
+                let chk_rfs = ui
+                    .checkbox(&mut rating_fs, "Show rating stars in fullscreen")
+                    .on_hover_text("Show rating stars in the top-left corner when viewing photos in fullscreen (F)");
+                register(ui, "check:organizerShowRatingInFullscreen", chk_rfs.rect);
+                if chk_rfs.changed() {
+                    let _ = app.run("organizer.setShowRatingInFullscreen", json!({"enabled": rating_fs}));
+                    app.ui.settings.show_rating_in_fullscreen = rating_fs;
+                }
+
+                ui.separator();
+
+                ui.label(egui::RichText::new("File Operations").font(t.semibold(11.0)).color(t.text_dim));
+
+                // Move to trash on delete checkbox
+                let mut trash_on_del = app.session.organizer.trash_on_delete;
+                let chk_trash = ui
+                    .checkbox(&mut trash_on_del, "Move to trash on delete")
+                    .on_hover_text("Move photo files and XMP sidecars to the system trash when deleting photos");
+                register(ui, "check:organizerTrashOnDelete", chk_trash.rect);
+                if chk_trash.changed() {
+                    let _ = app.run("organizer.setTrashOnDelete", json!({"enabled": trash_on_del}));
+                    app.ui.settings.trash_on_delete = trash_on_del;
+                }
+            });
         });
 
         ui.add_space(4.0);
@@ -1497,17 +1513,33 @@ mod tests {
         app.ui.view = ViewMode::SquareGrid;
         app.run("view.organizerBar", json!({"on": true})).unwrap();
 
-        // Checkbox exists in the organizer bar
+        // Options dropdown exists in the organizer bar
         let mut view = HeadlessView::new();
         let raw = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
         view.run(raw, |ui| {
             super::bar(&mut app, ui);
         });
         let widgets = crate::widgets::take_registry(&view.ctx);
-        assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
-        assert!(widgets.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
-        assert!(widgets.iter().any(|(w, _)| w == "check:organizerColoredRatingStars"));
-        assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowRatingInFullscreen"));
+        let opt_rect = widgets.iter().find(|(w, _)| w == "dropdown:organizerOptions").map(|(_, r)| *r).expect("options dropdown");
+
+        // Click options dropdown to open popover menu
+        let at = opt_rect.center();
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let raw_click = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![egui::Event::PointerMoved(at), press(true), press(false)]);
+        view.run(raw_click, |ui| {
+            super::bar(&mut app, ui);
+        });
+        // Settle popup layout
+        let raw_settle = HeadlessView::raw_input(vec2(1280.0, 800.0), 1.0, 0.5, vec![]);
+        view.run(raw_settle, |ui| {
+            super::bar(&mut app, ui);
+        });
+        let widgets_open = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerShowSubfolders"));
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerColoredRatingStars"));
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerShowRatingInFullscreen"));
 
         // Toggle command
         assert!(!app.session.organizer.show_tags_in_grid);
