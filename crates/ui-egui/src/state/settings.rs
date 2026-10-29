@@ -129,6 +129,9 @@ pub struct AppSettings {
     /// Move photo files and sidecars to the system trash on delete.
     #[serde(default)]
     pub trash_on_delete: bool,
+    /// Color rating stars by level (3 = yellow, 4 = orange, 5 = red) in grid.
+    #[serde(default)]
+    pub colored_rating_stars: bool,
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
@@ -220,6 +223,7 @@ impl Default for AppSettings {
             startup_view: StartupView::Last,
             confirm_delete: true,
             trash_on_delete: false,
+            colored_rating_stars: false,
             ask_before_move: true,
             close_dialogs_outside: false,
             import_dropped_directly: false,

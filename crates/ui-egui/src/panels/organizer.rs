@@ -334,6 +334,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("organizer.setTrashOnDelete", json!({"enabled": trash_on_del}));
                 app.ui.settings.trash_on_delete = trash_on_del;
             }
+
+            // Colored rating stars checkbox
+            let mut colored_stars = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
+            let chk_stars = ui
+                .checkbox(&mut colored_stars, "Colored rating stars")
+                .on_hover_text("Color rating stars in the grid: 3 = yellow, 4 = orange, 5 = red");
+            register(ui, "check:organizerColoredRatingStars", chk_stars.rect);
+            if chk_stars.changed() {
+                let _ = app.run("organizer.setColoredRatingStars", json!({"enabled": colored_stars}));
+                app.ui.settings.colored_rating_stars = colored_stars;
+            }
         });
 
         ui.add_space(4.0);
@@ -930,6 +941,7 @@ pub fn show_quick_tags_dialog(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_convert_screenshots_dialog(
     app: &mut LightcraftApp,
     ctx: &egui::Context,
@@ -1424,6 +1436,7 @@ mod tests {
         let widgets = crate::widgets::take_registry(&view.ctx);
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerShowTagsInGrid"));
         assert!(widgets.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
+        assert!(widgets.iter().any(|(w, _)| w == "check:organizerColoredRatingStars"));
 
         // Toggle command
         assert!(!app.session.organizer.show_tags_in_grid);

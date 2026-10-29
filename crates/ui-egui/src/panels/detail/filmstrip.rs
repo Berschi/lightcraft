@@ -137,7 +137,9 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
-                    film_badges(p, &t, fr, ph);
+                    let colored = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
+                    let star_color = crate::rating::rating_color(ph.rating, colored, t.star);
+                    film_badges(p, &t, fr, ph, star_color);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
                     let collapsed = st.collapsed;
@@ -204,7 +206,7 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
 }
 
 /// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
+fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo, star_color: Color32) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
@@ -215,7 +217,7 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
-    x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;
+    x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, star_color) + 2.0;
     match ph.flag {
         Flag::Pick => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagPickFilled, t.pick),
         Flag::Reject => paint(p, Rect::from_min_size(pos2(x, y - 5.0), vec2(10.0, 10.0)), Icon::FlagReject, t.reject),

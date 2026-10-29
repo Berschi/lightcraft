@@ -170,10 +170,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             ui.spacing_mut().item_spacing.y = 8.0;
             let custom_buttons = matches!(
                 dlg,
-                Dialog::QuickMove { .. }
-                    | Dialog::QuickTags { .. }
-                    | Dialog::ConvertScreenshots { .. }
-                    | Dialog::MyStuffPigallery { .. }
+                Dialog::QuickMove { .. } | Dialog::QuickTags { .. } | Dialog::ConvertScreenshots { .. } | Dialog::MyStuffPigallery { .. }
             );
             body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
                 dialog_content(app, ui, &t, body_max, &mut confirm, &mut close, &mut dlg)
@@ -1873,16 +1870,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         }
         Dialog::ConvertScreenshots { from_pattern, to_pattern, hide_unrenamed, all_visible } => {
             let ctx = ui.ctx().clone();
-            crate::panels::organizer::show_convert_screenshots_dialog(
-                app,
-                &ctx,
-                ui,
-                from_pattern,
-                to_pattern,
-                hide_unrenamed,
-                all_visible,
-                close,
-            );
+            crate::panels::organizer::show_convert_screenshots_dialog(app, &ctx, ui, from_pattern, to_pattern, hide_unrenamed, all_visible, close);
         }
         Dialog::MyStuffPigallery { host, pigallery_url, games, selected_game, game_filter, media, error, loaded_host } => {
             let ctx = ui.ctx().clone();

@@ -39,6 +39,9 @@ pub struct OrganizerState {
     /// Whether photo files and their XMP sidecars are moved to the system trash on delete.
     #[serde(default)]
     pub trash_on_delete: bool,
+    /// Whether rating stars are colored by rating level (3 = yellow, 4 = orange, 5 = red).
+    #[serde(default)]
+    pub colored_rating_stars: bool,
     /// Recently chosen destination subfolders (most recent first).
     pub recent_subfolders: Vec<String>,
     /// Base URL for PiGallery2 (e.g. `https://shirogane.fritz.box/pigallery2`).
@@ -99,6 +102,7 @@ impl Default for OrganizerState {
             show_subfolders_on_images: true,
             show_tags_in_grid: false,
             trash_on_delete: false,
+            colored_rating_stars: false,
             recent_subfolders: Vec::new(),
             pigallery_base_url: "https://shirogane.fritz.box/pigallery2".into(),
             mystuff_host: "shirogane".into(),
@@ -474,6 +478,7 @@ fn state_json(s: &mut Session) -> Value {
         "showSubfoldersOnImages": s.organizer.show_subfolders_on_images,
         "showTagsInGrid": s.organizer.show_tags_in_grid,
         "trashOnDelete": s.organizer.trash_on_delete,
+        "coloredRatingStars": s.organizer.colored_rating_stars,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
         "mystuffHost": s.organizer.mystuff_host,
@@ -749,226 +754,241 @@ fn valid_ymd_hms(y: u32, m: u32, d: u32, h: u32, min: u32, sec: u32) -> bool {
     (1970..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) && h <= 23 && min <= 59 && sec <= 59
 }
 
+fn match_sharex_spectacle(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}.\d{3}` (length 23)
+    if stem.len() != 23 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') || char_at(stem, 10) != Some(b'_') {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let h = parse_digits(stem, 11..13)?;
+    let min = parse_digits(stem, 14..16)?;
+    let sec = parse_digits(stem, 17..19)?;
+    let ms = parse_digits(stem, 20..23)?;
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: ms })
+}
+
+fn match_nvidia(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}\.\d{2}\.\d{2}\s-\s\d{2}\.\d{2}\.\d{2}(\s-\s\(\d+\))?(.\d{2,3})?`
+    if stem.len() < 21
+        || char_at(stem, 4) != Some(b'.')
+        || char_at(stem, 7) != Some(b'.')
+        || stem.get(10..13) != Some(" - ")
+        || char_at(stem, 15) != Some(b'.')
+        || char_at(stem, 18) != Some(b'.')
+    {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let h = parse_digits(stem, 13..15)?;
+    let min = parse_digits(stem, 16..18)?;
+    let sec = parse_digits(stem, 19..21)?;
+    if !valid_ymd_hms(y, m, d, h, min, sec) {
+        return None;
+    }
+    let mut rest = stem.get(21..).unwrap_or("");
+    // Optional ` - (\d+)`
+    if let Some(after_paren_prefix) = rest.strip_prefix(" - (") {
+        let close = after_paren_prefix.find(')')?;
+        let digits = after_paren_prefix.get(..close)?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        rest = after_paren_prefix.get(close + 1..).unwrap_or("");
+    }
+    // Optional `.\d{2,3}`
+    let millis = if rest.is_empty() {
+        0
+    } else {
+        let digits = rest.get(1..)?;
+        if !(2..=3).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let val = digits.parse::<u32>().ok()?;
+        if digits.len() == 2 { val * 10 } else { val }
+    };
+    Some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis })
+}
+
+fn match_amd(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}(_\d{1,2})?`
+    if stem.len() < 16
+        || char_at(stem, 4) != Some(b'.')
+        || char_at(stem, 7) != Some(b'.')
+        || char_at(stem, 10) != Some(b'-')
+        || char_at(stem, 13) != Some(b'.')
+    {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let h = parse_digits(stem, 11..13)?;
+    let min = parse_digits(stem, 14..16)?;
+    if !valid_ymd_hms(y, m, d, h, min, 0) {
+        return None;
+    }
+    let rest = stem.get(16..).unwrap_or("");
+    if !rest.is_empty() {
+        let digits = rest.strip_prefix('_')?;
+        if !(1..=2).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    Some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: 0, millis: 0 })
+}
+
+fn match_steam(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{14}_\d` (length 16)
+    if stem.len() != 16 || char_at(stem, 14) != Some(b'_') || !char_at(stem, 15).is_some_and(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 4..6)?;
+    let d = parse_digits(stem, 6..8)?;
+    let h = parse_digits(stem, 8..10)?;
+    let min = parse_digits(stem, 10..12)?;
+    let sec = parse_digits(stem, 12..14)?;
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
+}
+
+fn match_camera(stem: &str) -> Option<ParsedTimestamp> {
+    // `^(\d{8}_\d{6})([^.]+)?`
+    if stem.len() < 15 || char_at(stem, 8) != Some(b'_') {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 4..6)?;
+    let d = parse_digits(stem, 6..8)?;
+    let h = parse_digits(stem, 9..11)?;
+    let min = parse_digits(stem, 11..13)?;
+    let sec = parse_digits(stem, 13..15)?;
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
+}
+
+fn match_steam_old(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}-\d{2}-\d{2}_\d{5}(\s\d)?`
+    if stem.len() < 16 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') || char_at(stem, 10) != Some(b'_') {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let _seq = parse_digits(stem, 11..16)?;
+    let rest = stem.get(16..).unwrap_or("");
+    if !rest.is_empty() {
+        let d2 = rest.strip_prefix(' ')?;
+        if d2.len() != 1 || !d2.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    valid_ymd_hms(y, m, d, 0, 0, 0).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: 0, minute: 0, second: 0, millis: 0 })
+}
+
+fn match_steam_other_old(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}-\d{2}-\d{2}__\d{6}_\d` (length 20)
+    if stem.len() != 20
+        || char_at(stem, 4) != Some(b'-')
+        || char_at(stem, 7) != Some(b'-')
+        || stem.get(10..12) != Some("__")
+        || char_at(stem, 18) != Some(b'_')
+        || !char_at(stem, 19).is_some_and(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let h = parse_digits(stem, 12..14)?;
+    let min = parse_digits(stem, 14..16)?;
+    let sec = parse_digits(stem, 16..18)?;
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
+}
+
+fn match_switch(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{16}`
+    if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 4..6)?;
+    let d = parse_digits(stem, 6..8)?;
+    let h = parse_digits(stem, 8..10)?;
+    let min = parse_digits(stem, 10..12)?;
+    let sec = parse_digits(stem, 12..14)?;
+    let cs = parse_digits(stem, 14..16)?;
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: cs * 10 })
+}
+
+fn match_playstation(stem: &str) -> Option<ParsedTimestamp> {
+    // `[^_]+_\d{14}(_\d)?`
+    let (prefix, rest) = stem.split_once('_')?;
+    if prefix.is_empty() || rest.len() < 14 {
+        return None;
+    }
+    let y = parse_digits(rest, 0..4)?;
+    let m = parse_digits(rest, 4..6)?;
+    let d = parse_digits(rest, 6..8)?;
+    let h = parse_digits(rest, 8..10)?;
+    let min = parse_digits(rest, 10..12)?;
+    let sec = parse_digits(rest, 12..14)?;
+    let tail = rest.get(14..).unwrap_or("");
+    if !tail.is_empty() {
+        let d2 = tail.strip_prefix('_')?;
+        if d2.len() != 1 || !d2.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
+}
+
+fn match_windows_record(stem: &str) -> Option<ParsedTimestamp> {
+    // `\d{4}-\d{2}-\d{2}(\s\(\d+\))?`
+    if stem.len() < 10 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') {
+        return None;
+    }
+    let y = parse_digits(stem, 0..4)?;
+    let m = parse_digits(stem, 5..7)?;
+    let d = parse_digits(stem, 8..10)?;
+    let tail = stem.get(10..).unwrap_or("");
+    if !tail.is_empty() {
+        let inner = tail.strip_prefix(" (")?.strip_suffix(')')?;
+        if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+    }
+    valid_ymd_hms(y, m, d, 0, 0, 0).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: 0, minute: 0, second: 0, millis: 0 })
+}
+
+fn match_download_rename(stem: &str) -> Option<ParsedTimestamp> {
+    (stem.chars().count() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit() || b.is_ascii_alphanumeric())).then_some(ParsedTimestamp {
+        year: 2000,
+        month: 1,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        millis: 0,
+    })
+}
+
 /// Match `stem` against `pattern` and extract its timestamp when convertible.
 pub(crate) fn match_pattern(stem: &str, pattern: ScreenshotPattern) -> Option<ParsedTimestamp> {
     match pattern {
-        ScreenshotPattern::SharexSpectacle => {
-            // `\d{4}-\d{2}-\d{2}_\d{2}.\d{2}.\d{2}.\d{3}` (length 23)
-            if stem.len() != 23 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') || char_at(stem, 10) != Some(b'_') {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let h = parse_digits(stem, 11..13)?;
-            let min = parse_digits(stem, 14..16)?;
-            let sec = parse_digits(stem, 17..19)?;
-            let ms = parse_digits(stem, 20..23)?;
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp {
-                year: y,
-                month: m,
-                day: d,
-                hour: h,
-                minute: min,
-                second: sec,
-                millis: ms,
-            })
-        }
-        ScreenshotPattern::Nvidia => {
-            // `\d{4}\.\d{2}\.\d{2}\s-\s\d{2}\.\d{2}\.\d{2}(\s-\s\(\d+\))?(.\d{2,3})?`
-            if stem.len() < 21
-                || char_at(stem, 4) != Some(b'.')
-                || char_at(stem, 7) != Some(b'.')
-                || stem.get(10..13) != Some(" - ")
-                || char_at(stem, 15) != Some(b'.')
-                || char_at(stem, 18) != Some(b'.')
-            {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let h = parse_digits(stem, 13..15)?;
-            let min = parse_digits(stem, 16..18)?;
-            let sec = parse_digits(stem, 19..21)?;
-            if !valid_ymd_hms(y, m, d, h, min, sec) {
-                return None;
-            }
-            let mut rest = stem.get(21..).unwrap_or("");
-            // Optional ` - (\d+)`
-            if let Some(after_paren_prefix) = rest.strip_prefix(" - (") {
-                let close = after_paren_prefix.find(')')?;
-                let digits = after_paren_prefix.get(..close)?;
-                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-                rest = after_paren_prefix.get(close + 1..).unwrap_or("");
-            }
-            // Optional `.\d{2,3}`
-            let millis = if rest.is_empty() {
-                0
-            } else {
-                let digits = rest.get(1..)?;
-                if !(2..=3).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-                let val = digits.parse::<u32>().ok()?;
-                if digits.len() == 2 { val * 10 } else { val }
-            };
-            Some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis })
-        }
-        ScreenshotPattern::Amd => {
-            // `\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}(_\d{1,2})?`
-            if stem.len() < 16
-                || char_at(stem, 4) != Some(b'.')
-                || char_at(stem, 7) != Some(b'.')
-                || char_at(stem, 10) != Some(b'-')
-                || char_at(stem, 13) != Some(b'.')
-            {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let h = parse_digits(stem, 11..13)?;
-            let min = parse_digits(stem, 14..16)?;
-            if !valid_ymd_hms(y, m, d, h, min, 0) {
-                return None;
-            }
-            let rest = stem.get(16..).unwrap_or("");
-            if !rest.is_empty() {
-                let digits = rest.strip_prefix('_')?;
-                if !(1..=2).contains(&digits.len()) || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-            }
-            Some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: 0, millis: 0 })
-        }
-        ScreenshotPattern::Steam => {
-            // `\d{14}_\d` (length 16)
-            if stem.len() != 16 || char_at(stem, 14) != Some(b'_') || !char_at(stem, 15).is_some_and(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 4..6)?;
-            let d = parse_digits(stem, 6..8)?;
-            let h = parse_digits(stem, 8..10)?;
-            let min = parse_digits(stem, 10..12)?;
-            let sec = parse_digits(stem, 12..14)?;
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
-        }
-        ScreenshotPattern::Camera => {
-            // `^(\d{8}_\d{6})([^.]+)?`
-            if stem.len() < 15 || char_at(stem, 8) != Some(b'_') {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 4..6)?;
-            let d = parse_digits(stem, 6..8)?;
-            let h = parse_digits(stem, 9..11)?;
-            let min = parse_digits(stem, 11..13)?;
-            let sec = parse_digits(stem, 13..15)?;
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
-        }
-        ScreenshotPattern::SteamOld => {
-            // `\d{4}-\d{2}-\d{2}_\d{5}(\s\d)?`
-            if stem.len() < 16 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') || char_at(stem, 10) != Some(b'_') {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let _seq = parse_digits(stem, 11..16)?;
-            let rest = stem.get(16..).unwrap_or("");
-            if !rest.is_empty() {
-                let d2 = rest.strip_prefix(' ')?;
-                if d2.len() != 1 || !d2.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-            }
-            valid_ymd_hms(y, m, d, 0, 0, 0).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: 0, minute: 0, second: 0, millis: 0 })
-        }
-        ScreenshotPattern::SteamOtherOld => {
-            // `\d{4}-\d{2}-\d{2}__\d{6}_\d` (length 20)
-            if stem.len() != 20
-                || char_at(stem, 4) != Some(b'-')
-                || char_at(stem, 7) != Some(b'-')
-                || stem.get(10..12) != Some("__")
-                || char_at(stem, 18) != Some(b'_')
-                || !char_at(stem, 19).is_some_and(|b| b.is_ascii_digit())
-            {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let h = parse_digits(stem, 12..14)?;
-            let min = parse_digits(stem, 14..16)?;
-            let sec = parse_digits(stem, 16..18)?;
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
-        }
-        ScreenshotPattern::Switch => {
-            // `\d{16}`
-            if stem.len() != 16 || !stem.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 4..6)?;
-            let d = parse_digits(stem, 6..8)?;
-            let h = parse_digits(stem, 8..10)?;
-            let min = parse_digits(stem, 10..12)?;
-            let sec = parse_digits(stem, 12..14)?;
-            let cs = parse_digits(stem, 14..16)?;
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp {
-                year: y,
-                month: m,
-                day: d,
-                hour: h,
-                minute: min,
-                second: sec,
-                millis: cs * 10,
-            })
-        }
-        ScreenshotPattern::Playstation => {
-            // `[^_]+_\d{14}(_\d)?`
-            let (prefix, rest) = stem.split_once('_')?;
-            if prefix.is_empty() || rest.len() < 14 {
-                return None;
-            }
-            let y = parse_digits(rest, 0..4)?;
-            let m = parse_digits(rest, 4..6)?;
-            let d = parse_digits(rest, 6..8)?;
-            let h = parse_digits(rest, 8..10)?;
-            let min = parse_digits(rest, 10..12)?;
-            let sec = parse_digits(rest, 12..14)?;
-            let tail = rest.get(14..).unwrap_or("");
-            if !tail.is_empty() {
-                let d2 = tail.strip_prefix('_')?;
-                if d2.len() != 1 || !d2.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-            }
-            valid_ymd_hms(y, m, d, h, min, sec).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: h, minute: min, second: sec, millis: 0 })
-        }
-        ScreenshotPattern::WindowsRecord => {
-            // `\d{4}-\d{2}-\d{2}(\s\(\d+\))?`
-            if stem.len() < 10 || char_at(stem, 4) != Some(b'-') || char_at(stem, 7) != Some(b'-') {
-                return None;
-            }
-            let y = parse_digits(stem, 0..4)?;
-            let m = parse_digits(stem, 5..7)?;
-            let d = parse_digits(stem, 8..10)?;
-            let tail = stem.get(10..).unwrap_or("");
-            if !tail.is_empty() {
-                let inner = tail.strip_prefix(" (")?.strip_suffix(')')?;
-                if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-            }
-            valid_ymd_hms(y, m, d, 0, 0, 0).then_some(ParsedTimestamp { year: y, month: m, day: d, hour: 0, minute: 0, second: 0, millis: 0 })
-        }
-        ScreenshotPattern::DownloadRename => (stem.chars().count() == 32 && stem.bytes().all(|b| b.is_ascii_hexdigit() || b.is_ascii_alphanumeric()))
-            .then_some(ParsedTimestamp { year: 2000, month: 1, day: 1, hour: 0, minute: 0, second: 0, millis: 0 }),
+        ScreenshotPattern::SharexSpectacle => match_sharex_spectacle(stem),
+        ScreenshotPattern::Nvidia => match_nvidia(stem),
+        ScreenshotPattern::Amd => match_amd(stem),
+        ScreenshotPattern::Steam => match_steam(stem),
+        ScreenshotPattern::Camera => match_camera(stem),
+        ScreenshotPattern::SteamOld => match_steam_old(stem),
+        ScreenshotPattern::SteamOtherOld => match_steam_other_old(stem),
+        ScreenshotPattern::Switch => match_switch(stem),
+        ScreenshotPattern::Playstation => match_playstation(stem),
+        ScreenshotPattern::WindowsRecord => match_windows_record(stem),
+        ScreenshotPattern::DownloadRename => match_download_rename(stem),
     }
 }
 
@@ -1575,6 +1595,20 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "organizer.setColoredRatingStars",
+            "Color Rating Stars by Level",
+            [],
+            None,
+            "{enabled?: bool (default: toggle)} — color rating stars (3 = yellow, 4 = orange, 5 = red) in the grid",
+            always,
+            |s, p| {
+                let enabled = bool_or(p, "enabled", !s.organizer.colored_rating_stars);
+                s.organizer.colored_rating_stars = enabled;
+                let _ = s.save_prefs();
+                Ok(json!({"coloredRatingStars": enabled}))
+            }
+        ),
+        cmd!(
             "organizer.setMapping",
             "Configure Source → Target Root Mapping",
             [],
@@ -1850,6 +1884,19 @@ mod tests {
         let res2 = s.execute("organizer.setTrashOnDelete", &json!({})).unwrap();
         assert_eq!(res2["trashOnDelete"], false);
         assert!(!s.organizer.trash_on_delete);
+    }
+
+    #[test]
+    fn organizer_set_colored_rating_stars_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.colored_rating_stars);
+        let res = s.execute("organizer.setColoredRatingStars", &json!({"enabled": true})).unwrap();
+        assert_eq!(res["coloredRatingStars"], true);
+        assert!(s.organizer.colored_rating_stars);
+
+        let res2 = s.execute("organizer.setColoredRatingStars", &json!({})).unwrap();
+        assert_eq!(res2["coloredRatingStars"], false);
+        assert!(!s.organizer.colored_rating_stars);
     }
 
     #[test]

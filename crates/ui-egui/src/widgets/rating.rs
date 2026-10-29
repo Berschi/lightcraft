@@ -74,6 +74,25 @@ pub fn paint_rating(painter: &Painter, pos: Pos2, rating: u8, size: RatingSize, 
     f32::from(n) * size.step()
 }
 
+/// Returns the star color for a rating:
+/// When `colored` is true:
+/// - 3 stars: Yellow
+/// - 4 stars: Orange
+/// - 5 stars: Red
+/// - Otherwise: `fallback`
+pub fn rating_color(rating: u8, colored: bool, fallback: Color32) -> Color32 {
+    if colored {
+        match rating {
+            3 => Color32::from_rgb(250, 204, 21),
+            4 => Color32::from_rgb(249, 115, 22),
+            5 => Color32::from_rgb(239, 68, 68),
+            _ => fallback,
+        }
+    } else {
+        fallback
+    }
+}
+
 /// What the stars show once hovering is taken into account: the hovered star's rating previews over
 /// the current one.
 fn star_lit(i: u8, rating: u8, hover: Option<u8>) -> bool {
@@ -217,6 +236,19 @@ pub fn favorite_button(ui: &mut Ui, widget: String, favorite: bool, name: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rating_color_returns_colored_or_fallback() {
+        let fallback = Color32::from_rgb(100, 100, 100);
+        assert_eq!(rating_color(1, true, fallback), fallback);
+        assert_eq!(rating_color(2, true, fallback), fallback);
+        assert_eq!(rating_color(3, true, fallback), Color32::from_rgb(250, 204, 21));
+        assert_eq!(rating_color(4, true, fallback), Color32::from_rgb(249, 115, 22));
+        assert_eq!(rating_color(5, true, fallback), Color32::from_rgb(239, 68, 68));
+        assert_eq!(rating_color(3, false, fallback), fallback);
+        assert_eq!(rating_color(4, false, fallback), fallback);
+        assert_eq!(rating_color(5, false, fallback), fallback);
+    }
 
     #[test]
     fn the_hovered_star_previews_its_rating() {

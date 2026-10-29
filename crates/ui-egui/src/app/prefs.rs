@@ -82,6 +82,9 @@ impl LightcraftApp {
         if self.ui.settings.trash_on_delete && !self.session.organizer.trash_on_delete {
             self.session.organizer.trash_on_delete = true;
         }
+        if self.ui.settings.colored_rating_stars && !self.session.organizer.colored_rating_stars {
+            self.session.organizer.colored_rating_stars = true;
+        }
     }
 
     /// While no display profile is chosen, show previews through the profile of the screen the

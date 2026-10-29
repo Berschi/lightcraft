@@ -879,7 +879,15 @@ fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo:
     }
 }
 
-fn paint_cell_badges(app: &LightcraftApp, ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, img_rect: Rect, flags: BadgeFlags) {
+fn paint_cell_badges(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    t: &Tokens,
+    photo: &lightcraft_catalog::Photo,
+    img_rect: Rect,
+    flags: BadgeFlags,
+) {
     let BadgeFlags { square, selected, hovered } = flags;
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => hovered || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
@@ -914,7 +922,9 @@ fn paint_cell_badges(app: &LightcraftApp, ui: &egui::Ui, p: &egui::Painter, t: &
             p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
         }
         let mut x = bar.left() + 6.0;
-        x += crate::rating::paint_rating(p, pos2(x, bar.center().y), photo.rating, crate::rating::RatingSize::Medium, t.star) + 4.0;
+        let colored = app.session.organizer.colored_rating_stars || app.ui.settings.colored_rating_stars;
+        let star_color = crate::rating::rating_color(photo.rating, colored, t.star);
+        x += crate::rating::paint_rating(p, pos2(x, bar.center().y), photo.rating, crate::rating::RatingSize::Medium, star_color) + 4.0;
         match photo.flag {
             Flag::Pick => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagPickFilled, t.pick),
             Flag::Reject => paint(p, Rect::from_min_size(pos2(x, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::FlagReject, t.reject),

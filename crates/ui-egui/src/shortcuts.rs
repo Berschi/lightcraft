@@ -551,9 +551,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         return;
     }
     // M: Masking while editing in Detail view; in the grids or fullscreen preview, opens Quick Move (Assign Destination Subfolder)
-    if f == "panel.masking"
-        && (matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) || app.ui.fullscreen)
-    {
+    if f == "panel.masking" && (matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) || app.ui.fullscreen) {
         let _ = app.run("dialog.quickMove", json!({}));
         return;
     }
