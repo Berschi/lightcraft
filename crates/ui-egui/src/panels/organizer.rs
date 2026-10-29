@@ -23,11 +23,16 @@ use crate::widgets::{register, text_button};
 
 /// Whether the Organizer Bar should be shown above the grid.
 pub fn should_show_bar(app: &LightcraftApp) -> bool {
-    if app.ui.organizer_bar || !app.session.organizer.staged_moves.is_empty() {
-        return true;
+    match app.ui.organizer_bar {
+        Some(explicit) => explicit,
+        None => {
+            if !app.session.organizer.staged_moves.is_empty() {
+                return true;
+            }
+            let src = current_source_folder(&app.session);
+            matched_target_root(&app.session, src.as_deref()).is_some() || src.as_deref().map(Path::new).is_some_and(is_folder_empty)
+        }
     }
-    let src = current_source_folder(&app.session);
-    matched_target_root(&app.session, src.as_deref()).is_some() || src.as_deref().map(Path::new).is_some_and(is_folder_empty)
 }
 
 fn short_folder_name(path: &str) -> String {
@@ -387,6 +392,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if chk_trash.changed() {
                     let _ = app.run("organizer.setTrashOnDelete", json!({"enabled": trash_on_del}));
                     app.ui.settings.trash_on_delete = trash_on_del;
+                }
+            });
+
+            // Close button (✕) on the far right
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let close_btn = ui
+                    .add(egui::Button::new(egui::RichText::new("✕").font(t.semibold(12.0)).color(t.text_dim)).frame(false))
+                    .on_hover_text("Hide Media Organizer Bar (Shortcut: Alt+O)");
+                register(ui, "button:organizerClose", close_btn.rect);
+                if close_btn.clicked() {
+                    let _ = app.run("view.organizerBar", json!({"on": false}));
                 }
             });
         });
@@ -1458,6 +1474,28 @@ mod tests {
             crate::shortcuts::handle(&mut app, ui.ctx());
         });
         assert!(matches!(app.ui.dialog, Some(Dialog::QuickMove { .. })));
+        app.ui.dialog = None;
+
+        // Press Alt+O in PhotoGrid -> toggles organizer bar
+        app.ui.view = ViewMode::PhotoGrid;
+        app.ui.fullscreen = false;
+        let was_shown = super::should_show_bar(&app);
+        let raw_alt_o = HeadlessView::raw_input(
+            vec2(1200.0, 800.0),
+            1.0,
+            0.5,
+            vec![egui::Event::Key {
+                key: egui::Key::O,
+                physical_key: Some(egui::Key::O),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::ALT,
+            }],
+        );
+        view.run(raw_alt_o, |ui| {
+            crate::shortcuts::handle(&mut app, ui.ctx());
+        });
+        assert_eq!(super::should_show_bar(&app), !was_shown);
     }
 
     #[test]
@@ -1469,7 +1507,8 @@ mod tests {
         let mut app = LightcraftApp::new(session, Services::default());
         app.ui.view = ViewMode::PhotoGrid;
         app.run("view.organizerBar", json!({"on": true})).unwrap();
-        assert!(app.ui.organizer_bar);
+        assert_eq!(app.ui.organizer_bar, Some(true));
+        assert!(super::should_show_bar(&app));
 
         // Stage subfolder "_Lea/alleine" for the 2 selected photos
         app.run("organizer.stageSubfolder", json!({"subfolder": "_Lea/alleine"})).unwrap();
@@ -1500,6 +1539,19 @@ mod tests {
             });
             app.ui.dialog = None;
         }
+
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "button:organizerClose"), "organizerClose button should be registered");
+
+        // Closing the bar explicitly hides it even if there are staged moves
+        app.run("view.organizerBar", json!({"on": false})).unwrap();
+        assert_eq!(app.ui.organizer_bar, Some(false));
+        assert!(!super::should_show_bar(&app));
+
+        // Toggling re-enables it
+        app.run("view.organizerBar", json!({})).unwrap();
+        assert_eq!(app.ui.organizer_bar, Some(true));
+        assert!(super::should_show_bar(&app));
     }
 
     #[test]

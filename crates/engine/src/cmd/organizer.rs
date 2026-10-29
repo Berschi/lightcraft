@@ -1698,7 +1698,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(
             "organizer.setFilterLetterbox",
             "Filter Letterbox Images",
-            ["Organizer"],
+            [],
             None,
             "{enabled?: bool (default: toggle)} — filter displayed photos to only those with horizontal black bars (letterbox)",
             always,
@@ -1743,7 +1743,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ..cmd!(
                 "organizer.moveImages",
                 "Move Staged Images to Target Subfolders",
-                ["Photo"],
+                ["View", "Organizer"],
                 Some("Ctrl+Alt+M"),
                 "{targetFolder?: string, subfolder?: string, ids?: [photo]} — moves all photos with a staged destination subfolder into `<targetFolder>/<subfolder>` (with their XMP sidecars and `_1` collision suffix; one Undo step)",
                 has_staged_moves,

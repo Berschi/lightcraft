@@ -887,11 +887,13 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"filterBar": app.ui.filter_bar}))
         }
         "view.organizerBar" => {
-            app.ui.organizer_bar = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.organizer_bar);
-            if app.ui.organizer_bar && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
+            let currently_shown = crate::panels::organizer::should_show_bar(app);
+            let target = p.get("on").and_then(Value::as_bool).unwrap_or(!currently_shown);
+            app.ui.organizer_bar = Some(target);
+            if target && !matches!(app.ui.view, ViewMode::PhotoGrid | ViewMode::SquareGrid) {
                 app.ui.view = ViewMode::PhotoGrid;
             }
-            Ok(json!({"organizerBar": app.ui.organizer_bar}))
+            Ok(json!({"organizerBar": target}))
         }
         "dialog.quickMove" => {
             crate::panels::organizer::open_quick_move(app);

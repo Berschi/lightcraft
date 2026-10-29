@@ -270,7 +270,7 @@ pub struct UiState {
     pub filter_bar: bool,
     /// The Media Organizer bar above the grid (Todo → Target folder, Subfolder assignment, Batch Crop, Screenshots, MyStuff).
     #[serde(default)]
-    pub organizer_bar: bool,
+    pub organizer_bar: Option<bool>,
     /// Folders kept in Local (Browse Folder…, Keep in Local / Add to Local; `local.addRoot`):
     /// listed after the built-in locations, across restarts, whatever is browsed.
     pub local_roots: Vec<String>,
@@ -483,7 +483,7 @@ impl Default for UiState {
             settings: AppSettings::default(),
             window_fullscreen: None,
             filter_bar: false,
-            organizer_bar: false,
+            organizer_bar: None,
             local_roots: Vec::new(),
             local_browse_root: None,
             compare: None,
