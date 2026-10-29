@@ -1865,8 +1865,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             crate::panels::organizer::show_quick_move_dialog(app, &ctx, ui, subfolder, cursor, fresh, close);
         }
         Dialog::QuickTags { text, cursor, fresh } => {
-            let ctx = ui.ctx().clone();
-            crate::panels::organizer::show_quick_tags_dialog(app, &ctx, ui, text, cursor, fresh, close);
+            crate::panels::organizer::show_quick_tags_dialog(app, ui, text, cursor, fresh, close);
         }
         Dialog::ConvertScreenshots { from_pattern, to_pattern, hide_unrenamed, all_visible } => {
             let ctx = ui.ctx().clone();

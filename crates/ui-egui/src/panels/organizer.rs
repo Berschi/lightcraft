@@ -919,21 +919,14 @@ pub fn show_quick_move_dialog(
     }
 }
 
-pub fn show_quick_tags_dialog(
-    app: &mut LightcraftApp,
-    ctx: &egui::Context,
-    ui: &mut egui::Ui,
-    text: &mut String,
-    cursor: &mut usize,
-    fresh: &mut bool,
-    close: &mut bool,
-) {
-    let t = Tokens::get(ctx);
+pub fn show_quick_tags_dialog(app: &mut LightcraftApp, ui: &mut egui::Ui, text: &mut String, cursor: &mut usize, fresh: &mut bool, close: &mut bool) {
+    let ctx = ui.ctx().clone();
+    let t = Tokens::get(&ctx);
     let selection = app.session.selected();
     let sel_count = selection.len();
     ui.label(
         egui::RichText::new(format!(
-            "Add or remove tags for {sel_count} selected photo{} (separate multiple tags with commas; Enter adds, Esc closes)",
+            "Add existing tags from library for {sel_count} selected photo{} (↑/↓ selects, Enter/Click adds, Esc closes)",
             if sel_count == 1 { "" } else { "s" }
         ))
         .size(11.5)
@@ -961,22 +954,23 @@ pub fn show_quick_tags_dialog(
         ui.add_space(6.0);
     }
 
-    // Gather completions for the last comma-separated token
-    let last_tok = text.rsplit(',').next().unwrap_or("").trim().to_lowercase();
+    let query = text.trim().to_lowercase();
     let have: Vec<String> = chips.iter().filter(|c| c.on_all()).map(|c| c.path.clone()).collect();
     let mut suggestions: Vec<String> = Vec::new();
+
+    // First: matching recent keywords
     for r in &app.session.recent_keywords {
         if !have.iter().any(|h| h.eq_ignore_ascii_case(r))
-            && (last_tok.is_empty() || r.to_lowercase().contains(&last_tok))
+            && (query.is_empty() || r.to_lowercase().contains(&query))
             && !suggestions.iter().any(|s| s.eq_ignore_ascii_case(r))
         {
             suggestions.push(r.clone());
         }
     }
-    let comp = app.caches.completions(&app.session.catalog, &have, &last_tok);
-    for kw in &comp.keywords {
-        if !suggestions.iter().any(|s| s.eq_ignore_ascii_case(kw)) {
-            suggestions.push(kw.clone());
+    // Second: all matching catalog keywords from keyword_suggestions
+    for kw in app.session.catalog.keyword_suggestions(&have, &query, 60) {
+        if !suggestions.iter().any(|s| s.eq_ignore_ascii_case(&kw)) {
+            suggestions.push(kw);
         }
     }
 
@@ -984,24 +978,30 @@ pub fn show_quick_tags_dialog(
         *cursor = 0;
     }
 
-    let mut trigger_add_text = false;
-    let mut trigger_pick_suggestion = false;
+    let mut trigger_add = false;
+    let mut trigger_tab_complete = false;
+    let mut scroll_to_cursor = false;
+    let mut navigated = false;
 
     ui.input_mut(|i| {
         if i.consume_key(Modifiers::NONE, Key::ArrowDown) && !suggestions.is_empty() {
             *cursor = (*cursor + 1).min(suggestions.len().saturating_sub(1));
+            scroll_to_cursor = true;
+            navigated = true;
         } else if i.consume_key(Modifiers::NONE, Key::ArrowUp) && !suggestions.is_empty() {
             *cursor = cursor.saturating_sub(1);
+            scroll_to_cursor = true;
+            navigated = true;
         } else if i.consume_key(Modifiers::NONE, Key::Tab) && !suggestions.is_empty() {
-            trigger_pick_suggestion = true;
+            trigger_tab_complete = true;
         } else if i.consume_key(Modifiers::NONE, Key::Enter) {
-            trigger_add_text = true;
+            trigger_add = true;
         }
     });
 
     let prev = text.clone();
-    let resp = ui
-        .add(egui::TextEdit::singleline(text).hint_text("Type tag(s), e.g. Portrait, Vacation (Tab completes, Enter applies)…").desired_width(440.0));
+    let resp =
+        ui.add(egui::TextEdit::singleline(text).hint_text("Type tag name to filter library tags (↑/↓ selects, Enter adds)…").desired_width(440.0));
     register(ui, "field:quickTagsInput", resp.rect);
     if *fresh {
         resp.request_focus();
@@ -1009,63 +1009,78 @@ pub fn show_quick_tags_dialog(
     }
     if *text != prev {
         *cursor = 0;
+        scroll_to_cursor = true;
     }
 
-    if trigger_pick_suggestion && let Some(chosen) = suggestions.get(*cursor).cloned() {
-        let mut parts: Vec<String> = text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        if !parts.is_empty() {
-            parts.pop();
-        }
-        parts.push(chosen);
-        *text = format!("{}, ", parts.join(", "));
+    if trigger_tab_complete && let Some(chosen) = suggestions.get(*cursor).cloned() {
+        *text = chosen;
+        scroll_to_cursor = true;
         resp.request_focus();
     }
 
-    if !suggestions.is_empty() {
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical().id_salt("quick-tags-suggestions").max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
-            ui.set_min_width(420.0);
-            for (idx, kw) in suggestions.iter().take(40).enumerate() {
+    ui.add_space(4.0);
+    egui::ScrollArea::vertical().id_salt("quick-tags-suggestions").max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+        ui.set_min_width(420.0);
+        if suggestions.is_empty() {
+            if !query.is_empty() {
+                ui.label(egui::RichText::new("No matching tag found in library (only existing tags can be added)").size(11.5).color(t.reject));
+            } else {
+                ui.label(egui::RichText::new("No tags in library yet").size(11.5).color(t.text_dim));
+            }
+        } else {
+            for (idx, kw) in suggestions.iter().take(50).enumerate() {
                 let is_cur = idx == *cursor;
                 let r = ui.selectable_label(is_cur, format!("🏷 {kw}"));
                 register(ui, format!("quickTagOption:{kw}"), r.rect);
+                if is_cur && scroll_to_cursor {
+                    r.scroll_to_me(Some(egui::Align::Center));
+                }
                 if r.clicked() {
                     let _ = app.run("photo.setMeta", json!({"addKeywords": [kw]}));
+                    app.toast(&ctx, format!("Added tag “{kw}”"));
+                    text.clear();
+                    *cursor = 0;
                     resp.request_focus();
                 }
             }
-        });
-    }
+        }
+    });
+
+    let chosen_tag = suggestions.get(*cursor).cloned();
+    let can_add = (!query.is_empty() || navigated) && chosen_tag.is_some();
 
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui.button("Done (Esc)").clicked() {
             *close = true;
         }
-        let add_btn = ui.button(egui::RichText::new("Add Tag(s) (Enter)").color(t.accent));
+        let add_label = if let Some(tag) = &chosen_tag {
+            if !query.is_empty() || navigated { format!("Add “{tag}” (Enter)") } else { "Add Tag (Enter)".to_string() }
+        } else {
+            "Add Tag (Enter)".to_string()
+        };
+        let add_btn = ui.add_enabled(can_add, egui::Button::new(egui::RichText::new(add_label).color(if can_add { t.accent } else { t.text_dim })));
         register(ui, "button:quickTagsAdd", add_btn.rect);
         if add_btn.clicked() {
-            trigger_add_text = true;
+            trigger_add = true;
         }
     });
 
-    if trigger_add_text {
-        let kws: Vec<String> = text.split(',').map(|s| app.session.catalog.typed_keyword(s)).filter(|s| !s.is_empty()).collect();
-        if kws.is_empty() {
-            if let Some(chosen) = suggestions.get(*cursor).cloned() {
-                let _ = app.run("photo.setMeta", json!({"addKeywords": [chosen]}));
-            } else {
-                *close = true;
-            }
-        } else {
-            match app.run("photo.setMeta", json!({"addKeywords": kws})) {
+    if trigger_add {
+        if query.is_empty() && !navigated {
+            *close = true;
+        } else if let Some(chosen) = suggestions.get(*cursor).cloned() {
+            match app.run("photo.setMeta", json!({"addKeywords": [chosen]})) {
                 Ok(_) => {
-                    app.toast(ctx, format!("Added {} tag(s)", kws.len()));
+                    app.toast(&ctx, format!("Added tag “{chosen}”"));
                     text.clear();
+                    *cursor = 0;
                     resp.request_focus();
                 }
-                Err(e) => app.toast_error(ctx, e),
+                Err(e) => app.toast_error(&ctx, e),
             }
+        } else {
+            app.toast_error(&ctx, "Tag does not exist in library (only existing tags can be added)");
         }
     }
 }
@@ -1682,5 +1697,130 @@ mod tests {
 
         let widgets = crate::widgets::take_registry(&view.ctx);
         assert!(widgets.iter().any(|(w, _)| w == "loupe:fullscreenRating"));
+    }
+
+    #[test]
+    fn quick_tags_dialog_only_adds_selected_existing_library_tags() {
+        let mut session = lightcraft_engine::Session::with_demo();
+        let id = session.visible_cloned()[0];
+        session.execute("photo.setMeta", &json!({"ids": [id.0], "keywords": []})).unwrap();
+        session.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        session.execute("keyword.create", &json!({"name": "unser Haus"})).unwrap();
+        session.execute("keyword.create", &json!({"name": "Urlaub"})).unwrap();
+
+        let mut app = LightcraftApp::new(session, Services::default());
+        // Verify photo has no keywords initially
+        assert!(app.session.catalog.photo(id).unwrap().meta.keywords.is_empty());
+
+        let mut view = HeadlessView::new();
+
+        // 1. User types "unser ha" and presses Enter -> adds "unser Haus", NOT "unser ha"
+        let mut text = "unser ha".to_string();
+        let mut cursor = 0usize;
+        let mut fresh = false;
+        let mut close = false;
+
+        let raw_enter = HeadlessView::raw_input(
+            vec2(800.0, 600.0),
+            1.0,
+            0.1,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: Some(egui::Key::Enter),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        view.run(raw_enter, |ui| {
+            super::show_quick_tags_dialog(&mut app, ui, &mut text, &mut cursor, &mut fresh, &mut close);
+        });
+
+        let kws = app.session.catalog.photo(id).unwrap().meta.keywords.clone();
+        assert_eq!(kws, vec!["unser Haus".to_string()], "Must add completed tag 'unser Haus', not typed fragment 'unser ha'");
+        assert!(text.is_empty(), "Text field must be cleared after adding a tag");
+        assert_eq!(cursor, 0);
+
+        // 2. User types a non-existent tag "fantasia123" and presses Enter -> rejected, NOT added
+        let mut text_bad = "fantasia123".to_string();
+        let mut cursor_bad = 0usize;
+        let mut fresh_bad = false;
+        let mut close_bad = false;
+
+        let raw_enter_bad = HeadlessView::raw_input(
+            vec2(800.0, 600.0),
+            1.0,
+            0.2,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: Some(egui::Key::Enter),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        view.run(raw_enter_bad, |ui| {
+            super::show_quick_tags_dialog(&mut app, ui, &mut text_bad, &mut cursor_bad, &mut fresh_bad, &mut close_bad);
+        });
+
+        let kws_after = app.session.catalog.photo(id).unwrap().meta.keywords.clone();
+        assert_eq!(kws_after, vec!["unser Haus".to_string()], "Must not add non-existent tag");
+        assert_eq!(text_bad, "fantasia123", "Text should remain so user can fix typo");
+
+        // 3. User types "Url" and clicks on suggestion "Urlaub" -> adds "Urlaub"
+        let mut text_click = "Url".to_string();
+        let mut cursor_click = 0usize;
+        let mut fresh_click = false;
+        let mut close_click = false;
+
+        // First pass: render so we find the rect of quickTagOption:Urlaub
+        let raw_initial = HeadlessView::raw_input(vec2(800.0, 600.0), 1.0, 0.3, vec![]);
+        view.run(raw_initial, |ui| {
+            super::show_quick_tags_dialog(&mut app, ui, &mut text_click, &mut cursor_click, &mut fresh_click, &mut close_click);
+        });
+        let widgets = crate::widgets::take_registry(&view.ctx);
+        let urlaub_rect = widgets.iter().find(|(w, _)| w == "quickTagOption:Urlaub").map(|(_, r)| *r).expect("quickTagOption:Urlaub must exist");
+
+        // Click on "Urlaub": frame with press, then frame with release
+        let click_press = HeadlessView::raw_input(
+            vec2(800.0, 600.0),
+            1.0,
+            0.4,
+            vec![
+                egui::Event::PointerMoved(urlaub_rect.center()),
+                egui::Event::PointerButton {
+                    pos: urlaub_rect.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        view.run(click_press, |ui| {
+            super::show_quick_tags_dialog(&mut app, ui, &mut text_click, &mut cursor_click, &mut fresh_click, &mut close_click);
+        });
+
+        let click_release = HeadlessView::raw_input(
+            vec2(800.0, 600.0),
+            1.0,
+            0.45,
+            vec![
+                egui::Event::PointerMoved(urlaub_rect.center()),
+                egui::Event::PointerButton {
+                    pos: urlaub_rect.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        view.run(click_release, |ui| {
+            super::show_quick_tags_dialog(&mut app, ui, &mut text_click, &mut cursor_click, &mut fresh_click, &mut close_click);
+        });
+
+        let kws_final = app.session.catalog.photo(id).unwrap().meta.keywords.clone();
+        assert!(kws_final.contains(&"Urlaub".to_string()), "Must add clicked tag 'Urlaub'");
+        assert!(kws_final.contains(&"unser Haus".to_string()));
+        assert_eq!(kws_final.len(), 2);
     }
 }

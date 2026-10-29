@@ -236,10 +236,13 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             app.run("organizer.stageSubfolder", json!({"subfolder": sub}))
         }
         Dialog::QuickTags { text, .. } => {
-            if !text.trim().is_empty() {
-                app.run("keyword.add", json!({"keyword": text.trim()}))
-            } else {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
                 Ok(serde_json::Value::Null)
+            } else if app.session.catalog.has_keyword(trimmed) {
+                app.run("photo.setMeta", json!({"addKeywords": [trimmed]}))
+            } else {
+                Err("Tag does not exist in library (only existing tags can be added)".into())
             }
         }
         Dialog::ConvertScreenshots { from_pattern, to_pattern, all_visible, .. } => {
