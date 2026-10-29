@@ -5,7 +5,10 @@ use super::selection::{
     album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
     opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
 };
-use super::*;
+use super::{
+    Album, AlbumId, ColorLabel, CommandSpec, CopyrightStatus, Filter, Flag, GroupBy, LibrarySource, Op, PhotoId, Result, Selection, Session, Sort, SortKey,
+    Value, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, json, ok, str_param,
+};
 
 /// Seeds stay exactly representable as a JSON double, so web and agent clients read back what they wrote.
 const MAX_SEED: u64 = 1 << 53;
@@ -46,7 +49,7 @@ fn trash_photos_on_disk(s: &mut Session, targets: &[PhotoId]) {
                 && let lightcraft_catalog::Source::File { path } = &photo.source
             {
                 let file_path = std::path::PathBuf::from(path);
-                let sidecar = crate::sidecar::find_sidecar(path, s.sidecar_naming(*id));
+                let sidecar = crate::sidecar::find_sidecar(path.as_str(), s.sidecar_naming(*id));
                 if let Some(sc) = sidecar
                     && sc.exists()
                 {
