@@ -309,8 +309,14 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.separator();
 
             // Options popover dropdown
-            let opt_drop = crate::widgets::dropdown(ui, "organizerOptions", "Options", t.font(12.0), t.text_label)
-                .on_hover_text("Organizer display and file settings");
+            let filter_lb = app.session.organizer.filter_letterbox || app.ui.settings.filter_letterbox;
+            let opt_title = if filter_lb { "Options (Letterbox)" } else { "Options" };
+            let opt_color = if filter_lb { t.accent } else { t.text_label };
+            let opt_drop = crate::widgets::dropdown(ui, "organizerOptions", opt_title, t.font(12.0), opt_color).on_hover_text(if filter_lb {
+                "Organizer display and file settings (Letterbox filter active)"
+            } else {
+                "Organizer display and file settings"
+            });
             egui::Popup::menu(&opt_drop).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
                 ui.set_min_width(240.0);
                 ui.spacing_mut().item_spacing.y = 6.0;
@@ -355,6 +361,17 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if chk_rfs.changed() {
                     let _ = app.run("organizer.setShowRatingInFullscreen", json!({"enabled": rating_fs}));
                     app.ui.settings.show_rating_in_fullscreen = rating_fs;
+                }
+
+                // Show only letterboxed images checkbox
+                let mut filter_lb = app.session.organizer.filter_letterbox || app.ui.settings.filter_letterbox;
+                let chk_lb = ui
+                    .checkbox(&mut filter_lb, "Show only letterboxed images")
+                    .on_hover_text("Show only images that have horizontal black bars at the top and bottom (e.g. 21:9 cutscenes in 16:9 frames)");
+                register(ui, "check:organizerFilterLetterbox", chk_lb.rect);
+                if chk_lb.changed() {
+                    let _ = app.run("organizer.setFilterLetterbox", json!({"enabled": filter_lb}));
+                    app.ui.settings.filter_letterbox = filter_lb;
                 }
 
                 ui.separator();
@@ -405,6 +422,16 @@ pub fn bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     Ok(_) => app.toast(ui.ctx(), "Cropped selected photo(s) to 24:10"),
                     Err(e) => app.toast_error(ui.ctx(), e),
                 }
+            }
+
+            let filter_lb = app.session.organizer.filter_letterbox || app.ui.settings.filter_letterbox;
+            if text_button(ui, "organizerLetterboxToggle", if filter_lb { "Letterbox: On" } else { "Letterbox" }, filter_lb)
+                .on_hover_text("Filter view to only images with horizontal black bars top and bottom (Letterbox)")
+                .clicked()
+            {
+                let new_val = !filter_lb;
+                let _ = app.run("organizer.setFilterLetterbox", json!({"enabled": new_val}));
+                app.ui.settings.filter_letterbox = new_val;
             }
 
             ui.separator();
@@ -1520,6 +1547,7 @@ mod tests {
             super::bar(&mut app, ui);
         });
         let widgets = crate::widgets::take_registry(&view.ctx);
+        assert!(widgets.iter().any(|(w, _)| w == "button:organizerLetterboxToggle"));
         let opt_rect = widgets.iter().find(|(w, _)| w == "dropdown:organizerOptions").map(|(_, r)| *r).expect("options dropdown");
 
         // Click options dropdown to open popover menu
@@ -1540,6 +1568,7 @@ mod tests {
         assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerTrashOnDelete"));
         assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerColoredRatingStars"));
         assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerShowRatingInFullscreen"));
+        assert!(widgets_open.iter().any(|(w, _)| w == "check:organizerFilterLetterbox"));
 
         // Toggle command
         assert!(!app.session.organizer.show_tags_in_grid);

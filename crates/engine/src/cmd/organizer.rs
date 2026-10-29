@@ -45,6 +45,12 @@ pub struct OrganizerState {
     /// Whether rating stars are shown in the top-left corner in fullscreen view.
     #[serde(default)]
     pub show_rating_in_fullscreen: bool,
+    /// Whether only letterboxed photos (with horizontal black bars top and bottom) are shown.
+    #[serde(default)]
+    pub filter_letterbox: bool,
+    /// Cached letterbox detection result per photo.
+    #[serde(skip)]
+    pub letterbox_cache: BTreeMap<PhotoId, bool>,
     /// Recently chosen destination subfolders (most recent first).
     pub recent_subfolders: Vec<String>,
     /// Base URL for PiGallery2 (e.g. `https://shirogane.fritz.box/pigallery2`).
@@ -107,6 +113,8 @@ impl Default for OrganizerState {
             trash_on_delete: false,
             colored_rating_stars: false,
             show_rating_in_fullscreen: false,
+            filter_letterbox: false,
+            letterbox_cache: BTreeMap::new(),
             recent_subfolders: Vec::new(),
             pigallery_base_url: "https://shirogane.fritz.box/pigallery2".into(),
             mystuff_host: "shirogane".into(),
@@ -166,6 +174,7 @@ impl OrganizerState {
         self.cached_subfolders = None;
         self.cached_target_folders.clear();
         self.last_synced_source = None;
+        self.letterbox_cache.clear();
     }
 
     /// Record a newly created relative subfolder inside `target_folder` without re-scanning disk if cached.
@@ -484,6 +493,7 @@ fn state_json(s: &mut Session) -> Value {
         "trashOnDelete": s.organizer.trash_on_delete,
         "coloredRatingStars": s.organizer.colored_rating_stars,
         "showRatingInFullscreen": s.organizer.show_rating_in_fullscreen,
+        "filterLetterbox": s.organizer.filter_letterbox,
         "pigalleryUrl": pigallery_url,
         "mappings": s.organizer.mappings,
         "mystuffHost": s.organizer.mystuff_host,
@@ -1359,6 +1369,64 @@ pub fn has_staged_moves(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Filter `visible` in place to keep only photos that have horizontal black bars (letterbox).
+pub fn filter_letterbox_photos(s: &mut Session, visible: &mut Vec<PhotoId>) {
+    use rayon::prelude::*;
+
+    // 1. Gather uncached photos with a file source
+    let uncached: Vec<(PhotoId, String)> = visible
+        .iter()
+        .copied()
+        .filter(|id| !s.organizer.letterbox_cache.contains_key(id))
+        .filter_map(|id| {
+            let p = s.catalog.photo(id)?;
+            match &p.source {
+                Source::File { path } => Some((id, path.clone())),
+                Source::Demo { .. } => None,
+            }
+        })
+        .collect();
+
+    if !uncached.is_empty() {
+        let detected: Vec<(PhotoId, bool)> = uncached
+            .par_iter()
+            .map(|(id, path)| {
+                let is_lb = std::fs::read(path)
+                    .ok()
+                    .and_then(|bytes| lightcraft_codecs::decode_thumbnail(&bytes, 128).ok())
+                    .map(|thumb| {
+                        let orientation = lightcraft_geom::Orientation::from_exif(thumb.orientation);
+                        thumb.image.oriented(orientation).is_letterboxed()
+                    })
+                    .unwrap_or(false);
+                (*id, is_lb)
+            })
+            .collect();
+
+        for (id, is_lb) in detected {
+            s.organizer.letterbox_cache.insert(id, is_lb);
+        }
+    }
+
+    // 2. Fallback for any remaining photos (e.g. demo scenes or decodes needing pipeline)
+    for id in visible.iter() {
+        if !s.organizer.letterbox_cache.contains_key(id) {
+            let is_lb = s.source_now(*id, crate::media::SourceLevel::Thumb).map(|img| img.is_letterboxed()).unwrap_or(false);
+            s.organizer.letterbox_cache.insert(*id, is_lb);
+        }
+    }
+
+    // 3. Keep only letterboxed photos that have not been cropped to remove bars
+    visible.retain(|id| {
+        if let Some(p) = s.catalog.photo(*id)
+            && !p.develop.crop.geometry.is_identity()
+        {
+            return false;
+        }
+        s.organizer.letterbox_cache.get(id).copied().unwrap_or(false)
+    });
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -1625,6 +1693,22 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.organizer.show_rating_in_fullscreen = enabled;
                 let _ = s.save_prefs();
                 Ok(json!({"showRatingInFullscreen": enabled}))
+            }
+        ),
+        cmd!(
+            "organizer.setFilterLetterbox",
+            "Filter Letterbox Images",
+            ["Organizer"],
+            None,
+            "{enabled?: bool (default: toggle)} — filter displayed photos to only those with horizontal black bars (letterbox)",
+            always,
+            |s, p| {
+                let enabled = bool_or(p, "enabled", !s.organizer.filter_letterbox);
+                s.organizer.filter_letterbox = enabled;
+                let _ = s.save_prefs();
+                s.refresh_view();
+                let matched = s.visible().len();
+                Ok(json!({"filterLetterbox": enabled, "matched": matched}))
             }
         ),
         cmd!(
@@ -1929,6 +2013,79 @@ mod tests {
         let res2 = s.execute("organizer.setShowRatingInFullscreen", &json!({})).unwrap();
         assert_eq!(res2["showRatingInFullscreen"], false);
         assert!(!s.organizer.show_rating_in_fullscreen);
+    }
+
+    #[test]
+    fn organizer_set_filter_letterbox_toggles() {
+        let mut s = Session::new();
+        assert!(!s.organizer.filter_letterbox);
+        let res = s.execute("organizer.setFilterLetterbox", &json!({"enabled": true})).unwrap();
+        assert_eq!(res["filterLetterbox"], true);
+        assert!(s.organizer.filter_letterbox);
+
+        let res2 = s.execute("organizer.setFilterLetterbox", &json!({})).unwrap();
+        assert_eq!(res2["filterLetterbox"], false);
+        assert!(!s.organizer.filter_letterbox);
+    }
+
+    #[test]
+    fn organizer_filter_letterbox_filters_visible_photos() {
+        use lightcraft_raster::Rgba8;
+
+        let tmp = std::env::temp_dir().join(format!("lc-lb-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // 1. Create a letterboxed image (top & bottom black, middle bright)
+        let w = 100usize;
+        let h = 100usize;
+        let lb_img = Rgba8::from_fn(w, h, |_x, y| if (10..90).contains(&y) { [200, 200, 200, 255] } else { [0, 0, 0, 255] });
+        let p_lb = tmp.join("letterboxed.jpg");
+        let lb_bytes =
+            lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&lb_img), 95, Default::default(), &Default::default()).unwrap();
+        std::fs::write(&p_lb, &lb_bytes).unwrap();
+
+        // 2. Create a non-letterboxed image (solid bright)
+        let non_lb_img = Rgba8::filled(w, h, [200, 200, 200, 255]);
+        let p_non_lb = tmp.join("normal.jpg");
+        let non_lb_bytes =
+            lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&non_lb_img), 95, Default::default(), &Default::default()).unwrap();
+        std::fs::write(&p_non_lb, &non_lb_bytes).unwrap();
+
+        let mut s = Session::new();
+        let ph1 = lightcraft_catalog::Photo::new(
+            PhotoId(1),
+            Source::File { path: p_lb.to_string_lossy().to_string() },
+            "letterboxed.jpg",
+            "JPG",
+            w as u32,
+            h as u32,
+            "2026-03-15T19:42:08",
+        );
+        let ph2 = lightcraft_catalog::Photo::new(
+            PhotoId(2),
+            Source::File { path: p_non_lb.to_string_lossy().to_string() },
+            "normal.jpg",
+            "JPG",
+            w as u32,
+            h as u32,
+            "2026-03-15T19:42:08",
+        );
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(ph1) }).unwrap();
+        s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(ph2) }).unwrap();
+
+        // Without filter: both visible
+        assert_eq!(s.visible().len(), 2);
+
+        // Turn on letterbox filter: only photo 1 visible
+        s.execute("organizer.setFilterLetterbox", &json!({"enabled": true})).unwrap();
+        assert_eq!(s.visible(), vec![PhotoId(1)]);
+
+        // Turn off filter: both visible again
+        s.execute("organizer.setFilterLetterbox", &json!({"enabled": false})).unwrap();
+        assert_eq!(s.visible().len(), 2);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

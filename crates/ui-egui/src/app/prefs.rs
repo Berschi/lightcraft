@@ -88,6 +88,9 @@ impl LightcraftApp {
         if self.ui.settings.show_rating_in_fullscreen && !self.session.organizer.show_rating_in_fullscreen {
             self.session.organizer.show_rating_in_fullscreen = true;
         }
+        if self.ui.settings.filter_letterbox && !self.session.organizer.filter_letterbox {
+            self.session.organizer.filter_letterbox = true;
+        }
     }
 
     /// While no display profile is chosen, show previews through the profile of the screen the

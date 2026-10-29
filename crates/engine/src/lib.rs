@@ -1069,8 +1069,13 @@ impl Session {
 
     /// Photos shown in the grid/filmstrip for the current source, filter and sort.
     pub fn visible(&mut self) -> &[PhotoId] {
-        let mut key =
-            (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
+        let mut key = (
+            self.catalog.revision,
+            format!(
+                "{:?}|{:?}|{:?}|{:?}|{:?}|lb:{}",
+                self.source, self.filter, self.sort, self.browse, self.library_folder, self.organizer.filter_letterbox
+            ),
+        );
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
         // changed ask something else). Not the checks of Missing Photos below: they fill the view in, they are
         // no other view.
@@ -1193,6 +1198,9 @@ impl Session {
             if self.source != LibrarySource::RecentlyDeleted {
                 visible = self.catalog.arrange_stacks(&visible);
             }
+            if self.organizer.filter_letterbox {
+                cmd::organizer::filter_letterbox_photos(self, &mut visible);
+            }
             self.visible = visible.into();
             self.visible_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.visible_key = Some(key);
@@ -1259,7 +1267,7 @@ impl Session {
         if self.source == LibrarySource::Missing {
             return None;
         }
-        if self.filter == Filter::default() && !self.hold_view {
+        if self.filter == Filter::default() && !self.hold_view && !self.organizer.filter_letterbox {
             // nothing narrows the source: what the view lists is all of it, and is counted already (not a view
             // that holds photos that stopped matching: those are not of the source any more)
             let _ = self.visible();

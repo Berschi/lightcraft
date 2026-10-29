@@ -324,7 +324,14 @@ fn show_inner(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.canvas_rect = Some(ui.max_rect());
     if ids.is_empty() {
-        if !chips.is_empty() {
+        if app.session.organizer.filter_letterbox {
+            super::empty_message(
+                ui,
+                ui.max_rect(),
+                "No letterboxed photos",
+                "No photos with top and bottom black bars (letterbox) were found in this view. Turn off the Letterbox filter to show all photos.",
+            );
+        } else if !chips.is_empty() {
             let body = match total {
                 Some(n) if n > 0 => {
                     crate::i18n::tr_format!("{n} photos in {} are hidden by the filters above", crate::i18n::source_title(&app.session), n = n)

@@ -255,6 +255,56 @@ impl Rgb32f {
         use lightcraft_color::transfer::encode_srgb8;
         self.map(|p| [encode_srgb8(p[0]), encode_srgb8(p[1]), encode_srgb8(p[2]), 255])
     }
+
+    /// Detect whether the image has horizontal black bars at both the top and bottom (letterboxing).
+    pub fn is_letterboxed(&self) -> bool {
+        let (w, h) = (self.width, self.height);
+        if w < 16 || h < 16 {
+            return false;
+        }
+
+        let top_y = (h * 2 / 100).clamp(1, h / 8);
+        let bot_y = h.saturating_sub(top_y + 1).max(top_y + 1);
+        if bot_y <= top_y || bot_y >= h {
+            return false;
+        }
+
+        let is_row_black = |y: usize| -> bool {
+            if y >= h {
+                return false;
+            }
+            let row = self.row(y);
+            let mut black_count = 0usize;
+            for px in row {
+                if px[0] <= 0.1 && px[1] <= 0.1 && px[2] <= 0.1 {
+                    black_count += 1;
+                }
+            }
+            black_count * 100 >= w * 95
+        };
+
+        if !is_row_black(0) || !is_row_black(top_y) || !is_row_black(bot_y) || !is_row_black(h.saturating_sub(1)) {
+            return false;
+        }
+
+        let mid_start = h / 4;
+        let mid_end = (h * 3 / 4).min(h);
+        let mut has_content = false;
+        for y in (mid_start..mid_end).step_by(2) {
+            let row = self.row(y);
+            for px in row {
+                if px[0] > 0.15 || px[1] > 0.15 || px[2] > 0.15 {
+                    has_content = true;
+                    break;
+                }
+            }
+            if has_content {
+                break;
+            }
+        }
+
+        has_content
+    }
 }
 
 impl Rgba8 {
@@ -293,6 +343,58 @@ impl Rgba8 {
     pub fn to_linear(&self) -> Rgb32f {
         use lightcraft_color::transfer::decode_srgb8;
         self.map(|p| [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])])
+    }
+
+    /// Detect whether the image has horizontal black bars at both the top and bottom (letterboxing).
+    pub fn is_letterboxed(&self) -> bool {
+        let (w, h) = (self.width, self.height);
+        if w < 16 || h < 16 {
+            return false;
+        }
+
+        let top_y = (h * 2 / 100).clamp(1, h / 8);
+        let bot_y = h.saturating_sub(top_y + 1).max(top_y + 1);
+        if bot_y <= top_y || bot_y >= h {
+            return false;
+        }
+
+        let is_row_black = |y: usize| -> bool {
+            if y >= h {
+                return false;
+            }
+            let row = self.row(y);
+            let mut black_count = 0usize;
+            for px in row {
+                // Allow compression noise up to 25/255
+                if px[0] <= 25 && px[1] <= 25 && px[2] <= 25 {
+                    black_count += 1;
+                }
+            }
+            black_count * 100 >= w * 95
+        };
+
+        if !is_row_black(0) || !is_row_black(top_y) || !is_row_black(bot_y) || !is_row_black(h.saturating_sub(1)) {
+            return false;
+        }
+
+        // Must have non-black content in the middle (not a completely black image)
+        let mid_start = h / 4;
+        let mid_end = (h * 3 / 4).min(h);
+        let mut has_content = false;
+        for y in (mid_start..mid_end).step_by(2) {
+            let row = self.row(y);
+            for px in row {
+                if px[0] > 40 || px[1] > 40 || px[2] > 40 {
+                    has_content = true;
+                    break;
+                }
+            }
+            if has_content {
+                break;
+            }
+        }
+
+        has_content
     }
 }
 
@@ -387,5 +489,28 @@ mod tests {
         assert!(Rgba8::from_pixels(4, 3, vec![[0, 0, 0, 0]; 13]).is_none(), "too many pixels");
         assert!(Rgba8::from_pixels(0, 3, std::iter::empty()).is_none());
         assert!(Rgba8::from_pixels(usize::MAX, 2, std::iter::empty()).is_none());
+    }
+
+    #[test]
+    fn letterboxed_image_detection() {
+        // 100x100 image with 10px black bars top and bottom, bright middle
+        let letterboxed = Rgba8::from_fn(100, 100, |_x, y| if y < 10 || y >= 90 { [0, 0, 0, 255] } else { [200, 150, 100, 255] });
+        assert!(letterboxed.is_letterboxed());
+        assert!(letterboxed.to_linear().is_letterboxed());
+
+        // Full bright image: not letterboxed
+        let full_bright = Rgba8::filled(100, 100, [150, 150, 150, 255]);
+        assert!(!full_bright.is_letterboxed());
+        assert!(!full_bright.to_linear().is_letterboxed());
+
+        // Pure black image: not letterboxed (no middle content)
+        let pure_black = Rgba8::filled(100, 100, [0, 0, 0, 255]);
+        assert!(!pure_black.is_letterboxed());
+        assert!(!pure_black.to_linear().is_letterboxed());
+
+        // Only top black bar: not letterboxed
+        let top_only = Rgba8::from_fn(100, 100, |_x, y| if y < 10 { [0, 0, 0, 255] } else { [200, 150, 100, 255] });
+        assert!(!top_only.is_letterboxed());
+        assert!(!top_only.to_linear().is_letterboxed());
     }
 }
