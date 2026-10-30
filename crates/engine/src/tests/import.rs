@@ -2470,6 +2470,65 @@ fn import_partial_sidecar_override_with_rendered_develop() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+#[test]
+fn import_raw_with_embedded_develop_and_partial_sidecar() {
+    use lightcraft_catalog::ColorLabel;
+    let src = temp_dir("raw-embedded-develop-sidecar-test");
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="2" xmp:Label="Blue" crs:Exposure2012="+1.50"/></rdf:RDF></x:xmpmeta>"#;
+
+    // Case 1: Raw with embedded develop + rating + label, external sidecar has only Label Red
+    write_raw_with_xmp(&src.join("raw1.NEF"), xmp, 1);
+    let sidecar1 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Label="Red"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw1.xmp"), sidecar1).unwrap();
+
+    // Case 2: Raw with embedded develop, external sidecar overrides develop settings to Exposure +0.50 and Rating 5
+    write_raw_with_xmp(&src.join("raw2.NEF"), xmp, 2);
+    let sidecar2 = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmp:Rating="5" crs:Exposure2012="+0.50"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(src.join("raw2.xmp"), sidecar2).unwrap();
+
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 2);
+
+    let p1 = s.catalog.photos().find(|p| p.file_name == "raw1.NEF").unwrap();
+    assert_eq!(p1.rating, 2, "rating from embedded XMP is preserved");
+    assert_eq!(p1.label, Some(ColorLabel::Red), "label is overridden by external sidecar");
+    assert_eq!(p1.develop.light.exposure, 1.5, "raw keeps embedded develop when sidecar provides none");
+
+    let p2 = s.catalog.photos().find(|p| p.file_name == "raw2.NEF").unwrap();
+    assert_eq!(p2.rating, 5, "rating is overridden by external sidecar");
+    assert_eq!(p2.label, Some(ColorLabel::Blue), "label from embedded XMP is preserved");
+    assert_eq!(p2.develop.light.exposure, 0.5, "external sidecar develop overrides embedded develop");
+
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one,
+/// optionally with an embedded XMP packet in tag 700.
+fn write_raw_with_xmp(path: &Path, xmp: &str, seed: u8) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let px: Vec<u8> = (0..48 * 32).flat_map(|i| [(i % 251) as u8, 91, seed]).collect();
+    let j = encode_jpeg(&EncodeImage::new(48, 32, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let xmp_bytes = xmp.as_bytes();
+    let xmp_off = 8 + 2 + 36 + 4;
+    let jpeg_off = xmp_off + xmp_bytes.len();
+    let mut f = b"II*\0\x08\0\0\0\x03\0".to_vec();
+    for (tag, v) in [(513u16, jpeg_off as u32), (514, j.len() as u32)] {
+        f.extend_from_slice(&tag.to_le_bytes());
+        f.extend_from_slice(&[4, 0, 1, 0, 0, 0]);
+        f.extend_from_slice(&v.to_le_bytes());
+    }
+    f.extend_from_slice(&700u16.to_le_bytes());
+    f.extend_from_slice(&[1, 0]);
+    f.extend_from_slice(&(xmp_bytes.len() as u32).to_le_bytes());
+    f.extend_from_slice(&(xmp_off as u32).to_le_bytes());
+    f.extend_from_slice(&[0, 0, 0, 0]);
+    f.extend_from_slice(xmp_bytes);
+    f.extend_from_slice(&j);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, f).unwrap();
+}
+
 /// A raw container LightCraft shows by its embedded JPEG: a TIFF whose IFD0 points at one.
 fn write_raw(path: &Path) {
     use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
